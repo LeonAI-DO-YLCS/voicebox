@@ -4,11 +4,13 @@ MLX backend implementation for TTS and STT using mlx-audio.
 
 from typing import Optional, List, Tuple
 import asyncio
+import os
 import numpy as np
 from pathlib import Path
 
 from . import TTSBackend, STTBackend
 from ..utils.cache import get_cache_key, get_cached_voice_prompt, cache_voice_prompt
+from ..utils.hf_cache import find_local_snapshot_path, is_repo_cached
 from ..utils.audio import normalize_audio, load_audio
 from ..utils.progress import get_progress_manager
 from ..utils.hf_progress import HFProgressTracker, create_hf_progress_callback
@@ -381,10 +383,67 @@ class MLXTTSBackend:
 
 class MLXSTTBackend:
     """MLX-based STT backend using mlx-audio Whisper."""
-    
-    def __init__(self, model_size: str = "base"):
+
+    _WHISPER_MODEL_MAP = {
+        "turbo": "openai/whisper-large-v3-turbo",
+        "large-v3": "openai/whisper-large-v3",
+        "large": "openai/whisper-large",
+        "medium": "openai/whisper-medium",
+        "small": "openai/whisper-small",
+        "base": "openai/whisper-base",
+        "tiny": "openai/whisper-tiny",
+    }
+    _WHISPER_AUTO_PRIORITY = ["turbo", "large-v3"]
+
+    def __init__(self, model_size: str = "turbo"):
         self.model = None
-        self.model_size = model_size
+        self.model_size = self._normalize_model_size(
+            os.environ.get("VOICEBOX_STT_MODEL_SIZE", model_size)
+        )
+
+    @classmethod
+    def _normalize_model_size(cls, model_size: str) -> str:
+        if not model_size:
+            return "turbo"
+        normalized = model_size.strip().lower()
+        aliases = {
+            "large-v3-turbo": "turbo",
+            "whisper-large-v3-turbo": "turbo",
+            "openai/whisper-large-v3-turbo": "turbo",
+            "whisper-large-v3": "large-v3",
+            "openai/whisper-large-v3": "large-v3",
+            "whisper-large": "large",
+            "openai/whisper-large": "large",
+            "whisper-medium": "medium",
+            "openai/whisper-medium": "medium",
+            "whisper-small": "small",
+            "openai/whisper-small": "small",
+            "whisper-base": "base",
+            "openai/whisper-base": "base",
+            "whisper-tiny": "tiny",
+            "openai/whisper-tiny": "tiny",
+        }
+        if normalized in aliases:
+            normalized = aliases[normalized]
+        if normalized not in cls._WHISPER_MODEL_MAP:
+            print(
+                f"[stt] Unknown STT model size '{model_size}', defaulting to turbo"
+            )
+            return "turbo"
+        return normalized
+
+    def _get_model_repo_id(self, model_size: str) -> str:
+        normalized = self._normalize_model_size(model_size)
+        return self._WHISPER_MODEL_MAP[normalized]
+
+    def get_preferred_model_size(self) -> str:
+        env_model = os.environ.get("VOICEBOX_STT_MODEL_SIZE")
+        if env_model and env_model.strip().lower() not in {"", "auto"}:
+            return self._normalize_model_size(env_model)
+        for candidate in self._WHISPER_AUTO_PRIORITY:
+            if self._is_model_cached(candidate):
+                return candidate
+        return self.model_size
     
     def is_loaded(self) -> bool:
         """Check if model is loaded."""
@@ -401,32 +460,8 @@ class MLXSTTBackend:
             True if model is fully cached, False if missing or incomplete
         """
         try:
-            from huggingface_hub import constants as hf_constants
-            model_name = f"openai/whisper-{model_size}"
-            repo_cache = Path(hf_constants.HF_HUB_CACHE) / ("models--" + model_name.replace("/", "--"))
-            
-            if not repo_cache.exists():
-                return False
-            
-            # Check for .incomplete files - if any exist, download is still in progress
-            blobs_dir = repo_cache / "blobs"
-            if blobs_dir.exists() and any(blobs_dir.glob("*.incomplete")):
-                print(f"[_is_model_cached] Found .incomplete files for whisper-{model_size}, treating as not cached")
-                return False
-            
-            # Check that actual model weight files exist in snapshots
-            snapshots_dir = repo_cache / "snapshots"
-            if snapshots_dir.exists():
-                has_weights = (
-                    any(snapshots_dir.rglob("*.safetensors")) or
-                    any(snapshots_dir.rglob("*.bin")) or
-                    any(snapshots_dir.rglob("*.npz"))
-                )
-                if not has_weights:
-                    print(f"[_is_model_cached] No model weights found for whisper-{model_size}, treating as not cached")
-                    return False
-            
-            return True
+            model_name = self._get_model_repo_id(model_size)
+            return is_repo_cached(model_name, ("*.safetensors", "*.bin", "*.npz"))
         except Exception as e:
             print(f"[_is_model_cached] Error checking cache for whisper-{model_size}: {e}")
             return False
@@ -440,6 +475,7 @@ class MLXSTTBackend:
         """
         if model_size is None:
             model_size = self.model_size
+        model_size = self._normalize_model_size(model_size)
         
         if self.model is not None and self.model_size == model_size:
             return
@@ -473,10 +509,9 @@ class MLXSTTBackend:
             # Import mlx_audio
             from mlx_audio.stt import load
 
-            # MLX Whisper uses the standard OpenAI models
-            model_name = f"openai/whisper-{model_size}"
+            model_name = self._get_model_repo_id(model_size)
 
-            print(f"Loading MLX Whisper model {model_size}...")
+            print(f"Loading MLX Whisper model {model_size} ({model_name})...")
 
             # Only track download progress if model is NOT cached
             if not is_cached:
@@ -492,9 +527,14 @@ class MLXSTTBackend:
                     status="downloading",
                 )
 
+            local_snapshot = find_local_snapshot_path(
+                model_name, ("*.safetensors", "*.bin", "*.npz")
+            )
+            source = str(local_snapshot) if local_snapshot else model_name
+
             # Load the model (tqdm is patched, but filters out non-download progress)
             try:
-                self.model = load(model_name)
+                self.model = load(source)
             finally:
                 # Exit the patch context
                 tracker_context.__exit__(None, None, None)
@@ -536,6 +576,7 @@ class MLXSTTBackend:
         self,
         audio_path: str,
         language: Optional[str] = None,
+        model_size: Optional[str] = None,
     ) -> str:
         """
         Transcribe audio to text.
@@ -547,7 +588,7 @@ class MLXSTTBackend:
         Returns:
             Transcribed text
         """
-        await self.load_model_async(None)
+        await self.load_model_async(model_size)
 
         def _transcribe_sync():
             """Run synchronous transcription in thread pool."""

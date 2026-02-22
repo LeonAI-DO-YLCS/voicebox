@@ -5,7 +5,7 @@ Audio processing utilities.
 import numpy as np
 import soundfile as sf
 import librosa
-from typing import Tuple, Optional
+from typing import Tuple, Optional, Dict, Any
 
 
 def normalize_audio(
@@ -117,3 +117,146 @@ def validate_reference_audio(
         return True, None
     except Exception as e:
         return False, f"Error validating audio: {str(e)}"
+
+
+def compute_quality_metrics(
+    audio: np.ndarray,
+    silence_threshold: float = 0.01,
+    clipping_threshold: float = 0.99,
+) -> Dict[str, float]:
+    """
+    Compute deterministic quality metrics for a mono audio segment.
+    """
+    if audio.size == 0:
+        return {
+            "duration_seconds": 0.0,
+            "rms": 0.0,
+            "silence_ratio": 1.0,
+            "clipping_ratio": 1.0,
+            "peak_abs": 0.0,
+        }
+
+    abs_audio = np.abs(audio)
+    rms = float(np.sqrt(np.mean(audio**2)))
+    silence_ratio = float(np.mean(abs_audio <= silence_threshold))
+    clipping_ratio = float(np.mean(abs_audio >= clipping_threshold))
+    peak_abs = float(abs_audio.max())
+
+    return {
+        "duration_seconds": float(audio.shape[0]),
+        "rms": rms,
+        "silence_ratio": silence_ratio,
+        "clipping_ratio": clipping_ratio,
+        "peak_abs": peak_abs,
+    }
+
+
+def select_best_reference_segment(
+    audio: np.ndarray,
+    sample_rate: int,
+    recommended_target_seconds: float,
+    min_rms: float,
+    max_silence_ratio: float,
+    max_clipping_ratio: float,
+    selection_step_seconds: float,
+    policy_version: str = "v1",
+) -> Tuple[np.ndarray, Dict[str, Any]]:
+    """
+    Select a bounded, high-quality segment from reference audio.
+
+    For short clips (<= target window), returns the original audio with metadata.
+    For long clips, scans fixed-size windows and picks the best deterministic score.
+    """
+    if audio.size == 0:
+        raise ValueError("Cannot select reference segment from empty audio")
+
+    if sample_rate <= 0:
+        raise ValueError("sample_rate must be > 0")
+
+    total_duration_seconds = float(audio.shape[0] / sample_rate)
+    window_samples = max(1, int(recommended_target_seconds * sample_rate))
+    window_samples = min(window_samples, audio.shape[0])
+
+    # Fast path: clip already within the recommended target window.
+    if audio.shape[0] <= window_samples:
+        metrics = compute_quality_metrics(audio)
+        metrics["duration_seconds"] = float(audio.shape[0] / sample_rate)
+        return audio, {
+            "selected_start_ms": 0,
+            "selected_end_ms": int(total_duration_seconds * 1000),
+            "source_duration_ms": int(total_duration_seconds * 1000),
+            "metrics": metrics,
+            "fallback_reason": None,
+            "policy_version": policy_version,
+        }
+
+    step_samples = max(1, int(selection_step_seconds * sample_rate))
+    last_start = audio.shape[0] - window_samples
+
+    # Ensure the final window is evaluated even if step does not align.
+    starts = list(range(0, last_start + 1, step_samples))
+    if starts[-1] != last_start:
+        starts.append(last_start)
+
+    candidates = []
+    rms_norm_denom = max(min_rms * 2.0, 1e-8)
+
+    for start in starts:
+        end = start + window_samples
+        segment = audio[start:end]
+        metrics = compute_quality_metrics(segment)
+        metrics["duration_seconds"] = float(segment.shape[0] / sample_rate)
+
+        eligible = (
+            metrics["rms"] >= min_rms
+            and metrics["silence_ratio"] <= max_silence_ratio
+            and metrics["clipping_ratio"] <= max_clipping_ratio
+        )
+
+        # Deterministic weighted score.
+        normalized_rms = min(metrics["rms"] / rms_norm_denom, 1.5)
+        score = (
+            (1.0 - metrics["silence_ratio"]) * 0.45
+            + normalized_rms * 0.40
+            + (1.0 - metrics["clipping_ratio"]) * 0.15
+        )
+
+        if not eligible:
+            score -= 1.0
+
+        candidates.append(
+            {
+                "start": start,
+                "end": end,
+                "eligible": eligible,
+                "score": score,
+                "metrics": metrics,
+            }
+        )
+
+    eligible_candidates = [c for c in candidates if c["eligible"]]
+    fallback_reason = None
+
+    if eligible_candidates:
+        best = max(
+            eligible_candidates,
+            key=lambda c: (c["score"], -c["metrics"]["silence_ratio"], c["metrics"]["rms"]),
+        )
+    else:
+        # Deterministic fallback when all windows fail thresholds:
+        # prefer least silence, then highest RMS, then lowest clipping.
+        best = max(
+            candidates,
+            key=lambda c: (-c["metrics"]["silence_ratio"], c["metrics"]["rms"], -c["metrics"]["clipping_ratio"]),
+        )
+        fallback_reason = "no_segment_met_quality_thresholds"
+
+    selected = audio[best["start"]:best["end"]]
+    return selected, {
+        "selected_start_ms": int(best["start"] / sample_rate * 1000),
+        "selected_end_ms": int(best["end"] / sample_rate * 1000),
+        "source_duration_ms": int(total_duration_seconds * 1000),
+        "metrics": best["metrics"],
+        "fallback_reason": fallback_reason,
+        "policy_version": policy_version,
+    }

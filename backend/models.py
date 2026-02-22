@@ -44,9 +44,29 @@ class ProfileSampleResponse(BaseModel):
     profile_id: str
     audio_path: str
     reference_text: str
+    selection_start_ms: Optional[int] = None
+    selection_end_ms: Optional[int] = None
+    source_duration_ms: Optional[int] = None
+    selection_metrics_json: Optional[str] = None
+    selection_fallback_reason: Optional[str] = None
+    selection_policy_version: Optional[str] = None
 
     class Config:
         from_attributes = True
+
+
+class VoiceCloneReferencePolicyResponse(BaseModel):
+    """Response model for effective voice clone reference policy."""
+
+    hard_min_seconds: float
+    recommended_target_seconds: float
+    hard_max_seconds: float
+    capture_auto_stop_seconds: int
+    min_rms: float
+    max_silence_ratio: float
+    max_clipping_ratio: float
+    selection_step_seconds: float
+    policy_version: str
 
 
 class GenerationRequest(BaseModel):

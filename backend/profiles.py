@@ -7,6 +7,7 @@ from datetime import datetime
 import uuid
 import shutil
 from pathlib import Path
+import json
 from sqlalchemy.orm import Session
 from sqlalchemy import select
 
@@ -20,7 +21,12 @@ from .database import (
     VoiceProfile as DBVoiceProfile,
     ProfileSample as DBProfileSample,
 )
-from .utils.audio import validate_reference_audio, load_audio, save_audio
+from .utils.audio import (
+    validate_reference_audio,
+    load_audio,
+    save_audio,
+    select_best_reference_segment,
+)
 from .utils.images import validate_image, process_avatar
 from .utils.cache import _get_cache_dir, clear_profile_cache
 from .tts import get_tts_model
@@ -91,7 +97,13 @@ async def add_profile_sample(
         raise ValueError(f"Profile {profile_id} not found")
     
     # Validate audio
-    is_valid, error_msg = validate_reference_audio(audio_path)
+    policy = config.get_voice_clone_reference_policy()
+    is_valid, error_msg = validate_reference_audio(
+        audio_path,
+        min_duration=policy.hard_min_seconds,
+        max_duration=policy.hard_max_seconds,
+        min_rms=policy.min_rms,
+    )
     if not is_valid:
         raise ValueError(f"Invalid reference audio: {error_msg}")
     
@@ -103,7 +115,17 @@ async def add_profile_sample(
     # Copy audio file to profile directory
     dest_path = profile_dir / f"{sample_id}.wav"
     audio, sr = load_audio(audio_path)
-    save_audio(audio, str(dest_path), sr)
+    selected_audio, selection_meta = select_best_reference_segment(
+        audio=audio,
+        sample_rate=sr,
+        recommended_target_seconds=policy.recommended_target_seconds,
+        min_rms=policy.min_rms,
+        max_silence_ratio=policy.max_silence_ratio,
+        max_clipping_ratio=policy.max_clipping_ratio,
+        selection_step_seconds=policy.selection_step_seconds,
+        policy_version=policy.policy_version,
+    )
+    save_audio(selected_audio, str(dest_path), sr)
     
     # Create database entry
     db_sample = DBProfileSample(
@@ -111,6 +133,12 @@ async def add_profile_sample(
         profile_id=profile_id,
         audio_path=str(dest_path),
         reference_text=reference_text,
+        selection_start_ms=selection_meta["selected_start_ms"],
+        selection_end_ms=selection_meta["selected_end_ms"],
+        source_duration_ms=selection_meta["source_duration_ms"],
+        selection_metrics_json=json.dumps(selection_meta["metrics"]),
+        selection_fallback_reason=selection_meta["fallback_reason"],
+        selection_policy_version=selection_meta["policy_version"],
     )
     
     db.add(db_sample)
