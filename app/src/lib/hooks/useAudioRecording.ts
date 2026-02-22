@@ -131,6 +131,27 @@ export function useAudioRecording({
     setWaveformSamples((current) => [...current.slice(-239), normalizedLevel]);
   }, []);
 
+  const sampleNativeCaptureLevel = useCallback(async () => {
+    if (!platform.metadata.isTauri || !nativeFallbackRef.current) {
+      return;
+    }
+
+    try {
+      const levels = await platform.audio.getSystemAudioCaptureLevels();
+      if (levels.length === 0) {
+        setWaveformMode('meter');
+        return;
+      }
+
+      setWaveformMode('waveform');
+      setWaveformSamples(levels.slice(-240));
+      setLiveInputLevel(levels[levels.length - 1] ?? 0);
+    } catch (captureLevelError) {
+      console.debug('Failed to read native capture levels:', captureLevelError);
+      setWaveformMode('meter');
+    }
+  }, [platform.audio, platform.metadata.isTauri]);
+
   const extractErrorMessage = useCallback((err: unknown): string => {
     if (err instanceof Error && typeof err.message === 'string') {
       return err.message;
@@ -213,11 +234,12 @@ export function useAudioRecording({
       if (!startTimeRef.current) return;
       const elapsed = (Date.now() - startTimeRef.current) / 1000;
       setDuration(elapsed);
+      void sampleNativeCaptureLevel();
       if (elapsed >= maxDurationSeconds) {
         stopRecordingRef.current?.();
       }
     }, 100);
-  }, [applyLifecycleState, maxDurationSeconds, platform.audio]);
+  }, [applyLifecycleState, maxDurationSeconds, platform.audio, sampleNativeCaptureLevel]);
 
   const tryNativeFallbackCapture = useCallback(async (): Promise<boolean> => {
     if (!platform.metadata.isTauri) {
@@ -385,6 +407,7 @@ export function useAudioRecording({
     platform.metadata.isTauri,
     resetLifecycle,
     sampleInputLevel,
+    sampleNativeCaptureLevel,
     startSignalMonitoring,
     stopSignalMonitoring,
     tryNativeFallbackCapture,

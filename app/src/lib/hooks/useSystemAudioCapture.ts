@@ -17,6 +17,8 @@ interface UseSystemAudioCaptureOptions {
   onRecordingComplete?: (blob: Blob, duration?: number) => void;
 }
 
+type WaveformMode = 'waveform' | 'meter';
+
 function mapSystemCaptureErrorMessage(error: unknown): string {
   const raw =
     error instanceof Error
@@ -59,6 +61,9 @@ export function useSystemAudioCapture({
   const [disconnectedDeviceId, setDisconnectedDeviceId] = useState<string | null>(null);
   const [isLoadingInputDevices, setIsLoadingInputDevices] = useState(false);
   const [lifecycleState, setLifecycleState] = useState<RecordingLifecycleState>('idle');
+  const [liveInputLevel, setLiveInputLevel] = useState(0);
+  const [waveformSamples, setWaveformSamples] = useState<number[]>([]);
+  const [waveformMode, setWaveformMode] = useState<WaveformMode>('waveform');
   const timerRef = useRef<number | null>(null);
   const startTimeRef = useRef<number | null>(null);
   const stopRecordingRef = useRef<(() => Promise<void>) | null>(null);
@@ -75,6 +80,27 @@ export function useSystemAudioCapture({
       return result.next;
     });
   }, []);
+
+  const sampleNativeCaptureLevel = useCallback(async () => {
+    if (!platform.metadata.isTauri || !isRecordingRef.current) {
+      return;
+    }
+
+    try {
+      const levels = await platform.audio.getSystemAudioCaptureLevels();
+      if (levels.length === 0) {
+        setWaveformMode('meter');
+        return;
+      }
+
+      setWaveformMode('waveform');
+      setWaveformSamples(levels.slice(-240));
+      setLiveInputLevel(levels[levels.length - 1] ?? 0);
+    } catch (captureLevelError) {
+      console.debug('Failed to read system capture levels:', captureLevelError);
+      setWaveformMode('meter');
+    }
+  }, [platform.audio, platform.metadata.isTauri]);
 
   const refreshPermissionState = useCallback(async (): Promise<MicrophonePermissionState> => {
     if (typeof navigator === 'undefined' || !('permissions' in navigator)) {
@@ -218,6 +244,9 @@ export function useSystemAudioCapture({
     try {
       setError(null);
       setDuration(0);
+      setLiveInputLevel(0);
+      setWaveformSamples([]);
+      setWaveformMode('meter');
       applyLifecycleState('armed');
 
       await platform.audio.startSystemAudioCapture(maxDurationSeconds, selectedInputDeviceId);
@@ -231,6 +260,7 @@ export function useSystemAudioCapture({
         if (startTimeRef.current) {
           const elapsed = (Date.now() - startTimeRef.current) / 1000;
           setDuration(elapsed);
+          void sampleNativeCaptureLevel();
           if (elapsed >= maxDurationSeconds && stopRecordingRef.current) {
             applyLifecycleState('processing');
             void stopRecordingRef.current();
@@ -249,6 +279,7 @@ export function useSystemAudioCapture({
     isSupported,
     maxDurationSeconds,
     platform,
+    sampleNativeCaptureLevel,
     selectedInputDeviceId,
   ]);
 
@@ -292,6 +323,8 @@ export function useSystemAudioCapture({
     setIsRecording(false);
     isRecordingRef.current = false;
     setDuration(0);
+    setLiveInputLevel(0);
+    setWaveformSamples([]);
     setError(null);
     applyLifecycleState('idle');
 
@@ -329,6 +362,9 @@ export function useSystemAudioCapture({
     permissionState,
     lifecycleState,
     lifecycleStatus,
+    liveInputLevel,
+    waveformSamples,
+    waveformMode,
     inputDevices,
     selectedInputDeviceId,
     disconnectedDeviceId,

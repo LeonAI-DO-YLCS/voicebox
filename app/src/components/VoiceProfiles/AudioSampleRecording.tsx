@@ -4,6 +4,9 @@ import { FormControl, FormItem, FormMessage } from '@/components/ui/form';
 import type { RecordingLifecycleState } from '@/lib/recording/lifecycle';
 import type { RecordingProcessingTask } from '@/lib/recording/processing';
 import { formatAudioDuration } from '@/lib/utils/audio';
+import type { AudioInputSignalProbe } from '@/platform/types';
+import { AudioInputDiagnosticsPanel } from './AudioInputDiagnosticsPanel';
+import { LiveLevelMeter, WaveformStrip } from './WaveformFeedback';
 
 interface AudioSampleRecordingProps {
   file: File | null | undefined;
@@ -27,48 +30,11 @@ interface AudioSampleRecordingProps {
   isPlaying: boolean;
   isTranscribing?: boolean;
   maxDurationSeconds?: number;
-}
-
-function LiveLevelMeter({ level }: { level: number }) {
-  const clampedLevel = Math.max(0, Math.min(1, level));
-  return (
-    <div className="w-full h-2 rounded-full bg-muted overflow-hidden">
-      <div
-        className="h-full bg-accent transition-[width] duration-100"
-        style={{ width: `${Math.round(clampedLevel * 100)}%` }}
-      />
-    </div>
-  );
-}
-
-function WaveformStrip({
-  samples,
-  playheadProgress,
-}: {
-  samples: number[];
-  playheadProgress?: number;
-}) {
-  const bars = samples.length > 0 ? samples : Array.from({ length: 60 }, () => 0.08);
-  const playheadPercent =
-    playheadProgress !== undefined ? Math.max(0, Math.min(1, playheadProgress)) * 100 : null;
-
-  return (
-    <div className="relative h-20 w-full rounded-md bg-background/40 border border-border px-2 py-2 flex items-end gap-[2px] overflow-hidden">
-      {bars.map((sample, index) => (
-        <div
-          key={`${index}-${sample}`}
-          className="flex-1 bg-accent/70 rounded-sm"
-          style={{ height: `${Math.max(6, Math.round(sample * 100))}%` }}
-        />
-      ))}
-      {playheadPercent !== null && (
-        <div
-          className="absolute top-0 bottom-0 w-[2px] bg-primary"
-          style={{ left: `calc(${playheadPercent}% - 1px)` }}
-        />
-      )}
-    </div>
-  );
+  diagnosticsProbe?: AudioInputSignalProbe | null;
+  diagnosticsError?: string | null;
+  isDiagnosticsRunning?: boolean;
+  onRunDiagnostics?: () => void;
+  diagnosticsDisabled?: boolean;
 }
 
 export function AudioSampleRecording({
@@ -90,6 +56,11 @@ export function AudioSampleRecording({
   isPlaying,
   isTranscribing = false,
   maxDurationSeconds = 30,
+  diagnosticsProbe = null,
+  diagnosticsError = null,
+  isDiagnosticsRunning = false,
+  onRunDiagnostics,
+  diagnosticsDisabled = false,
 }: AudioSampleRecordingProps) {
   const remainingSeconds = Math.max(0, maxDurationSeconds - duration);
   const isNearMaxDuration = remainingSeconds <= 5;
@@ -115,6 +86,19 @@ export function AudioSampleRecording({
               <p className="relative z-10 text-xs text-muted-foreground text-center">
                 Maximum duration: {maxDurationSeconds} seconds.
               </p>
+              {onRunDiagnostics && (
+                <div className="relative z-10 w-full">
+                  <AudioInputDiagnosticsPanel
+                    title="Microphone Signal Check"
+                    description="Run this when recording sounds silent. Speak for 2 seconds while checking."
+                    onRunProbe={onRunDiagnostics}
+                    isProbing={isDiagnosticsRunning}
+                    probe={diagnosticsProbe}
+                    error={diagnosticsError}
+                    disabled={diagnosticsDisabled}
+                  />
+                </div>
+              )}
             </div>
           )}
 

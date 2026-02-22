@@ -23,6 +23,16 @@ fn get_server_port() -> u16 {
     })
 }
 
+fn is_server_error_line(line: &str) -> bool {
+    let lower = line.to_ascii_lowercase();
+    lower.contains("traceback")
+        || lower.contains("exception")
+        || lower.contains("critical")
+        || lower.contains("fatal")
+        || lower.contains("error:")
+        || lower.contains(" failed")
+}
+
 struct ServerState {
     child: Mutex<Option<tauri_plugin_shell::process::CommandChild>>,
     server_pid: Mutex<Option<u32>>,
@@ -397,10 +407,15 @@ async fn start_server(
                     }
                     tauri_plugin_shell::process::CommandEvent::Stderr(line) => {
                         let line_str = String::from_utf8_lossy(&line).to_string();
-                        eprintln!("Server: {}", line_str);
+                        let trimmed = line_str.trim_end();
+                        if is_server_error_line(trimmed) {
+                            eprintln!("Server error: {}", trimmed);
+                        } else {
+                            println!("Server: {}", trimmed);
+                        }
 
                         // Collect error lines for debugging
-                        if line_str.contains("ERROR") || line_str.contains("Error") || line_str.contains("Failed") {
+                        if is_server_error_line(trimmed) {
                             error_output.push(line_str.clone());
                         }
 
@@ -463,10 +478,16 @@ async fn start_server(
         while let Some(event) = rx.recv().await {
             match event {
                 tauri_plugin_shell::process::CommandEvent::Stdout(line) => {
-                    println!("Server: {}", String::from_utf8_lossy(&line));
+                    println!("Server: {}", String::from_utf8_lossy(&line).trim_end());
                 }
                 tauri_plugin_shell::process::CommandEvent::Stderr(line) => {
-                    eprintln!("Server error: {}", String::from_utf8_lossy(&line));
+                    let line_str = String::from_utf8_lossy(&line).to_string();
+                    let trimmed = line_str.trim_end();
+                    if is_server_error_line(trimmed) {
+                        eprintln!("Server error: {}", trimmed);
+                    } else {
+                        println!("Server: {}", trimmed);
+                    }
                 }
                 _ => {}
             }
@@ -649,6 +670,21 @@ fn list_system_audio_input_devices() -> Result<Vec<audio_capture::AudioInputDevi
 }
 
 #[command]
+fn get_system_audio_capture_levels(
+    state: State<'_, audio_capture::AudioCaptureState>,
+) -> Vec<f32> {
+    audio_capture::get_recent_levels(&state)
+}
+
+#[command]
+fn probe_system_audio_input_signal(
+    device_id: Option<String>,
+    duration_ms: Option<u64>,
+) -> Result<audio_capture::AudioInputSignalProbe, String> {
+    audio_capture::probe_input_signal(device_id, duration_ms.unwrap_or(2000))
+}
+
+#[command]
 fn list_audio_output_devices(
     state: State<'_, audio_output::AudioOutputState>,
 ) -> Result<Vec<audio_output::AudioOutputDevice>, String> {
@@ -720,6 +756,8 @@ pub fn run() {
             stop_system_audio_capture,
             is_system_audio_supported,
             list_system_audio_input_devices,
+            get_system_audio_capture_levels,
+            probe_system_audio_input_signal,
             list_audio_output_devices,
             play_audio_to_devices,
             stop_audio_playback

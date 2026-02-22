@@ -1,4 +1,4 @@
-import type { PlatformAudio, AudioDevice } from '@/platform/types';
+import type { PlatformAudio, AudioDevice, AudioInputSignalProbe } from '@/platform/types';
 
 export const webAudio: PlatformAudio = {
   isSystemAudioSupported(): boolean {
@@ -14,6 +14,23 @@ export const webAudio: PlatformAudio = {
 
   async stopSystemAudioCapture(): Promise<Blob> {
     throw new Error('System audio capture is only available in the desktop app.');
+  },
+
+  async getSystemAudioCaptureLevels(): Promise<number[]> {
+    return [];
+  },
+
+  async probeSystemAudioInputSignal(): Promise<AudioInputSignalProbe> {
+    return {
+      device_name: 'Desktop runtime required',
+      duration_ms: 0,
+      sample_count: 0,
+      peak: 0,
+      rms: 0,
+      normalized_level: 0,
+      has_signal: false,
+      message: 'Signal diagnostics are only available in the desktop app.',
+    };
   },
 
   async listSystemAudioInputDevices(): Promise<AudioDevice[]> {

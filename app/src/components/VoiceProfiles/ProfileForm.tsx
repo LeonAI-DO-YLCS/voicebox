@@ -34,7 +34,9 @@ import { useToast } from '@/components/ui/use-toast';
 import { LANGUAGE_CODES, LANGUAGE_OPTIONS, type LanguageCode } from '@/lib/constants/languages';
 import { getErrorDisplayDetails } from '@/lib/errors';
 import { useAudioPlayer } from '@/lib/hooks/useAudioPlayer';
+import { useAudioInputDiagnostics } from '@/lib/hooks/useAudioInputDiagnostics';
 import { useAudioRecording } from '@/lib/hooks/useAudioRecording';
+import { useAudioWaveformPreview } from '@/lib/hooks/useAudioWaveformPreview';
 import {
   useAddSample,
   useCreateProfile,
@@ -158,6 +160,10 @@ export function ProfileForm() {
   });
 
   const selectedFile = form.watch('sampleFile');
+  const { waveformSamples: uploadedWaveformSamples, isLoading: isUploadWaveformLoading } =
+    useAudioWaveformPreview(selectedFile);
+  const microphoneDiagnostics = useAudioInputDiagnostics();
+  const systemDiagnostics = useAudioInputDiagnostics();
   const selectedAvatarFile = form.watch('avatarFile');
   const { task: activeProcessingTask } = useRecordingProcessingProgress(activeTranscriptionTaskId);
 
@@ -246,6 +252,9 @@ export function ProfileForm() {
     permissionState: systemPermissionState,
     lifecycleState: systemLifecycleState,
     lifecycleStatus: systemLifecycleStatus,
+    liveInputLevel: systemLiveInputLevel,
+    waveformSamples: systemWaveformSamples,
+    waveformMode: systemWaveformMode,
     inputDevices: systemInputDevices,
     selectedInputDeviceId,
     disconnectedDeviceId,
@@ -777,6 +786,9 @@ export function ProfileForm() {
                                 fieldName={name}
                                 recommendedDurationSeconds={recommendedAudioDurationSeconds}
                                 maxDurationSeconds={maxAudioDurationSeconds}
+                                waveformSamples={uploadedWaveformSamples}
+                                playbackProgress={playbackProgress}
+                                isWaveformLoading={isUploadWaveformLoading}
                               />
                             )}
                           />
@@ -806,6 +818,22 @@ export function ProfileForm() {
                                 isPlaying={isPlaying}
                                 isTranscribing={transcribe.isPending}
                                 maxDurationSeconds={captureMaxDurationSeconds}
+                                diagnosticsProbe={microphoneDiagnostics.lastProbe}
+                                diagnosticsError={microphoneDiagnostics.probeError}
+                                isDiagnosticsRunning={microphoneDiagnostics.isProbing}
+                                onRunDiagnostics={
+                                  platform.metadata.isTauri
+                                    ? () => {
+                                        void microphoneDiagnostics.runProbe(null, 2000);
+                                      }
+                                    : undefined
+                                }
+                                diagnosticsDisabled={
+                                  !platform.metadata.isTauri ||
+                                  isRecording ||
+                                  isSystemRecording ||
+                                  transcribe.isPending
+                                }
                               />
                             )}
                           />
@@ -838,6 +866,24 @@ export function ProfileForm() {
                                   isPlaying={isPlaying}
                                   isTranscribing={transcribe.isPending}
                                   maxDurationSeconds={captureMaxDurationSeconds}
+                                  liveInputLevel={systemLiveInputLevel}
+                                  waveformSamples={systemWaveformSamples}
+                                  waveformMode={systemWaveformMode}
+                                  playbackProgress={playbackProgress}
+                                  previewWaveformSamples={uploadedWaveformSamples}
+                                  diagnosticsProbe={systemDiagnostics.lastProbe}
+                                  diagnosticsError={systemDiagnostics.probeError}
+                                  isDiagnosticsRunning={systemDiagnostics.isProbing}
+                                  onRunDiagnostics={() => {
+                                    void systemDiagnostics.runProbe(selectedInputDeviceId, 2000);
+                                  }}
+                                  diagnosticsDisabled={
+                                    isSystemRecording ||
+                                    isLoadingInputDevices ||
+                                    !systemInputDevices.some(
+                                      (device) => device.availability === 'available',
+                                    )
+                                  }
                                 />
                               )}
                             />
