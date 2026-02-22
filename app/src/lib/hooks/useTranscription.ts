@@ -4,7 +4,14 @@ import type { LanguageCode } from '@/lib/constants/languages';
 
 export function useTranscription() {
   return useMutation({
-    mutationFn: ({ file, language }: { file: File; language?: LanguageCode }) =>
-      apiClient.transcribeAudio(file, language),
+    mutationFn: ({
+      file,
+      language,
+      taskId,
+    }: {
+      file: File;
+      language?: LanguageCode;
+      taskId?: string;
+    }) => apiClient.transcribeAudio(file, language, { taskId }),
   });
 }

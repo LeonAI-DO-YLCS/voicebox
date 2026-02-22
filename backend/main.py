@@ -4,10 +4,12 @@ FastAPI application for voicebox backend.
 Handles voice cloning, generation history, and server mode.
 """
 
-from fastapi import FastAPI, Depends, UploadFile, File, Form, HTTPException
+from fastapi import FastAPI, Depends, UploadFile, File, Form, HTTPException, Request, Response
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, StreamingResponse
+from fastapi.responses import FileResponse, StreamingResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
+from starlette.exceptions import HTTPException as StarletteHTTPException
 from sqlalchemy.orm import Session
 from typing import List, Optional
 from datetime import datetime
@@ -44,6 +46,111 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+def _error_hint_for_status(status_code: int) -> str:
+    if status_code in (400, 422):
+        return "The request input is invalid. Review input fields and try again."
+    if status_code in (401, 403):
+        return "The request was rejected due to access rules."
+    if status_code == 404:
+        return "The requested resource was not found."
+    if status_code == 409:
+        return "The request conflicts with current state. Retry after refresh."
+    if status_code >= 500:
+        return "The server encountered an internal error. Check backend logs with the request ID."
+    return "Retry the request. If the issue persists, provide the request ID to support."
+
+
+@app.middleware("http")
+async def request_id_middleware(request: Request, call_next):
+    request_id = request.headers.get("x-request-id") or str(uuid.uuid4())
+    request.state.request_id = request_id
+    response = await call_next(request)
+    response.headers["X-Request-ID"] = request_id
+    return response
+
+
+@app.exception_handler(HTTPException)
+async def http_exception_handler(request: Request, exc: HTTPException):
+    request_id = getattr(request.state, "request_id", str(uuid.uuid4()))
+    detail = exc.detail
+    message = detail.get("message") if isinstance(detail, dict) else str(detail)
+
+    return JSONResponse(
+        status_code=exc.status_code,
+        headers={"X-Request-ID": request_id},
+        content={
+            "detail": detail,
+            "error": {
+                "message": message,
+                "status_code": exc.status_code,
+                "request_id": request_id,
+                "hint": _error_hint_for_status(exc.status_code),
+            },
+        },
+    )
+
+
+@app.exception_handler(StarletteHTTPException)
+async def starlette_http_exception_handler(request: Request, exc: StarletteHTTPException):
+    request_id = getattr(request.state, "request_id", str(uuid.uuid4()))
+    detail = exc.detail
+    message = detail.get("message") if isinstance(detail, dict) else str(detail)
+
+    return JSONResponse(
+        status_code=exc.status_code,
+        headers={"X-Request-ID": request_id},
+        content={
+            "detail": detail,
+            "error": {
+                "message": message,
+                "status_code": exc.status_code,
+                "request_id": request_id,
+                "hint": _error_hint_for_status(exc.status_code),
+            },
+        },
+    )
+
+
+@app.exception_handler(RequestValidationError)
+async def request_validation_handler(request: Request, exc: RequestValidationError):
+    request_id = getattr(request.state, "request_id", str(uuid.uuid4()))
+    return JSONResponse(
+        status_code=422,
+        headers={"X-Request-ID": request_id},
+        content={
+            "detail": exc.errors(),
+            "error": {
+                "message": "Request validation failed",
+                "status_code": 422,
+                "request_id": request_id,
+                "hint": _error_hint_for_status(422),
+            },
+        },
+    )
+
+
+@app.exception_handler(Exception)
+async def unhandled_exception_handler(request: Request, exc: Exception):
+    request_id = getattr(request.state, "request_id", str(uuid.uuid4()))
+    print(
+        f"[error] request_id={request_id} method={request.method} path={request.url.path} "
+        f"exception={type(exc).__name__}: {exc}"
+    )
+    return JSONResponse(
+        status_code=500,
+        headers={"X-Request-ID": request_id},
+        content={
+            "detail": "Internal server error",
+            "error": {
+                "message": "Unexpected server error",
+                "status_code": 500,
+                "request_id": request_id,
+                "hint": _error_hint_for_status(500),
+            },
+        },
+    )
 
 
 # ============================================
@@ -191,6 +298,13 @@ async def health():
     )
 
 
+@app.get("/voice-clone/policy", response_model=models.VoiceCloneReferencePolicyResponse)
+async def get_voice_clone_reference_policy():
+    """Get effective voice clone reference policy values."""
+    policy = config.get_voice_clone_reference_policy()
+    return models.VoiceCloneReferencePolicyResponse(**policy.to_dict())
+
+
 # ============================================
 # VOICE PROFILE ENDPOINTS
 # ============================================
@@ -280,11 +394,22 @@ async def delete_profile(
 @app.post("/profiles/{profile_id}/samples", response_model=models.ProfileSampleResponse)
 async def add_profile_sample(
     profile_id: str,
+    request: Request,
+    response: Response,
     file: UploadFile = File(...),
     reference_text: str = Form(...),
     db: Session = Depends(get_db),
 ):
     """Add a sample to a voice profile."""
+    task_manager = get_task_manager()
+    processing_task_id = request.headers.get("x-task-id") or str(uuid.uuid4())
+    task_manager.start_recording_processing(
+        processing_task_id, "Uploading sample for validation"
+    )
+    task_manager.update_recording_processing(
+        processing_task_id, stage="upload", progress=5.0, message="Uploading sample"
+    )
+
     # Preserve the uploaded file's extension so librosa can detect format correctly.
     # Defaulting to .wav was causing soundfile to reject MP3/WebM content as invalid WAV.
     _allowed_audio_exts = {'.wav', '.mp3', '.m4a', '.ogg', '.flac', '.aac', '.webm', '.opus'}
@@ -297,16 +422,52 @@ async def add_profile_sample(
         tmp_path = tmp.name
 
     try:
+        task_manager.update_recording_processing(
+            processing_task_id,
+            stage="validate",
+            progress=35.0,
+            message="Validating sample quality",
+        )
         sample = await profiles.add_profile_sample(
             profile_id,
             tmp_path,
             reference_text,
             db,
         )
+        task_manager.update_recording_processing(
+            processing_task_id,
+            stage="embed",
+            progress=80.0,
+            message="Preparing voice embedding data",
+        )
+        task_manager.update_recording_processing(
+            processing_task_id,
+            stage="save",
+            progress=95.0,
+            message="Saving sample",
+        )
+        task_manager.complete_recording_processing(
+            processing_task_id,
+            stage="save",
+            message="Sample saved",
+        )
+        response.headers["X-Task-ID"] = processing_task_id
         return sample
     except ValueError as e:
+        task_manager.error_recording_processing(
+            processing_task_id,
+            str(e),
+            stage="validate",
+            message="Sample validation failed",
+        )
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
+        task_manager.error_recording_processing(
+            processing_task_id,
+            str(e),
+            stage="save",
+            message="Failed to process sample",
+        )
         raise HTTPException(status_code=500, detail=f"Failed to process audio file: {str(e)}")
     finally:
         # Clean up temp file
@@ -891,10 +1052,21 @@ async def export_generation_audio(
 
 @app.post("/transcribe", response_model=models.TranscriptionResponse)
 async def transcribe_audio(
+    request: Request,
+    response: Response,
     file: UploadFile = File(...),
     language: Optional[str] = Form(None),
 ):
     """Transcribe audio file to text."""
+    task_manager = get_task_manager()
+    processing_task_id = request.headers.get("x-task-id") or str(uuid.uuid4())
+    task_manager.start_recording_processing(
+        processing_task_id, "Uploading sample for transcription"
+    )
+    task_manager.update_recording_processing(
+        processing_task_id, stage="upload", progress=5.0, message="Uploading sample"
+    )
+
     # Save uploaded file to temporary location
     with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
         content = await file.read()
@@ -904,20 +1076,39 @@ async def transcribe_audio(
     try:
         # Get audio duration
         from .utils.audio import load_audio
+        task_manager.update_recording_processing(
+            processing_task_id,
+            stage="validate",
+            progress=25.0,
+            message="Validating recording",
+        )
         audio, sr = load_audio(tmp_path)
         duration = len(audio) / sr
         
         # Transcribe
         whisper_model = transcribe.get_whisper_model()
 
-        # Check if Whisper model is downloaded (uses default size "base")
-        model_size = whisper_model.model_size
-        model_name = f"openai/whisper-{model_size}"
+        # Choose best available local STT model (prefers turbo) before attempting download.
+        model_size = (
+            whisper_model.get_preferred_model_size()
+            if hasattr(whisper_model, "get_preferred_model_size")
+            else getattr(whisper_model, "model_size", "turbo")
+        )
+        model_name = (
+            whisper_model._get_model_repo_id(model_size)
+            if hasattr(whisper_model, "_get_model_repo_id")
+            else f"openai/whisper-{model_size}"
+        )
+        is_cached = (
+            whisper_model._is_model_cached(model_size)
+            if hasattr(whisper_model, "_is_model_cached")
+            else False
+        )
+        print(
+            f"[transcribe] Selected STT model: size={model_size}, repo={model_name}, cached={is_cached}"
+        )
 
-        # Check if model is cached
-        from huggingface_hub import constants as hf_constants
-        repo_cache = Path(hf_constants.HF_HUB_CACHE) / ("models--" + model_name.replace("/", "--"))
-        if not repo_cache.exists():
+        if not is_cached:
             # Start download in background
             progress_model_name = f"whisper-{model_size}"
 
@@ -931,23 +1122,65 @@ async def transcribe_audio(
             asyncio.create_task(download_whisper_background())
 
             # Return 202 Accepted
+            task_manager.error_recording_processing(
+                processing_task_id,
+                f"Transcription model {model_size} is downloading",
+                stage="transcribe",
+                message=f"Whisper {model_size} is downloading; retry once complete",
+            )
             raise HTTPException(
                 status_code=202,
                 detail={
-                    "message": f"Whisper model {model_size} is being downloaded. Please wait and try again.",
+                    "message": f"Whisper model {model_size} ({model_name}) is being downloaded. Please wait and try again.",
                     "model_name": progress_model_name,
-                    "downloading": True
+                    "downloading": True,
+                    "task_id": processing_task_id,
+                    "stage": "transcribe",
                 }
             )
 
-        text = await whisper_model.transcribe(tmp_path, language)
+        task_manager.update_recording_processing(
+            processing_task_id,
+            stage="transcribe",
+            progress=55.0,
+            message="Transcribing audio",
+        )
+        text = await whisper_model.transcribe(tmp_path, language, model_size=model_size)
+        task_manager.update_recording_processing(
+            processing_task_id,
+            stage="embed",
+            progress=80.0,
+            message="Preparing transcript embedding",
+        )
+        task_manager.update_recording_processing(
+            processing_task_id,
+            stage="save",
+            progress=95.0,
+            message="Saving transcript",
+        )
+        task_manager.complete_recording_processing(
+            processing_task_id,
+            stage="save",
+            message="Transcript ready",
+        )
+        response.headers["X-Task-ID"] = processing_task_id
         
         return models.TranscriptionResponse(
             text=text,
             duration=duration,
+            task_id=processing_task_id,
+            stage="save",
         )
         
+    except HTTPException:
+        raise
     except Exception as e:
+        task_manager.error_recording_processing(
+            processing_task_id,
+            str(e),
+            stage="transcribe",
+            message="Transcription failed",
+        )
         raise HTTPException(status_code=500, detail=str(e))
     finally:
         # Clean up temp file
@@ -1286,18 +1519,9 @@ async def get_model_status():
     if backend_type == "mlx":
         tts_1_7b_id = "mlx-community/Qwen3-TTS-12Hz-1.7B-Base-bf16"
         tts_0_6b_id = "mlx-community/Qwen3-TTS-12Hz-1.7B-Base-bf16"  # Fallback to 1.7B
-        # MLX backend uses openai/whisper-* models, not mlx-community
-        whisper_base_id = "openai/whisper-base"
-        whisper_small_id = "openai/whisper-small"
-        whisper_medium_id = "openai/whisper-medium"
-        whisper_large_id = "openai/whisper-large"
     else:
         tts_1_7b_id = "Qwen/Qwen3-TTS-12Hz-1.7B-Base"
         tts_0_6b_id = "Qwen/Qwen3-TTS-12Hz-0.6B-Base"
-        whisper_base_id = "openai/whisper-base"
-        whisper_small_id = "openai/whisper-small"
-        whisper_medium_id = "openai/whisper-medium"
-        whisper_large_id = "openai/whisper-large"
     
     model_configs = [
         {
@@ -1315,30 +1539,44 @@ async def get_model_status():
             "check_loaded": lambda: check_tts_loaded("0.6B"),
         },
         {
+            "model_name": "whisper-turbo",
+            "display_name": "Whisper Large-v3 Turbo",
+            "hf_repo_id": "openai/whisper-large-v3-turbo",
+            "model_size": "turbo",
+            "check_loaded": lambda: check_whisper_loaded("turbo"),
+        },
+        {
+            "model_name": "whisper-large-v3",
+            "display_name": "Whisper Large-v3",
+            "hf_repo_id": "openai/whisper-large-v3",
+            "model_size": "large-v3",
+            "check_loaded": lambda: check_whisper_loaded("large-v3"),
+        },
+        {
             "model_name": "whisper-base",
             "display_name": "Whisper Base",
-            "hf_repo_id": whisper_base_id,
+            "hf_repo_id": "openai/whisper-base",
             "model_size": "base",
             "check_loaded": lambda: check_whisper_loaded("base"),
         },
         {
             "model_name": "whisper-small",
             "display_name": "Whisper Small",
-            "hf_repo_id": whisper_small_id,
+            "hf_repo_id": "openai/whisper-small",
             "model_size": "small",
             "check_loaded": lambda: check_whisper_loaded("small"),
         },
         {
             "model_name": "whisper-medium",
             "display_name": "Whisper Medium",
-            "hf_repo_id": whisper_medium_id,
+            "hf_repo_id": "openai/whisper-medium",
             "model_size": "medium",
             "check_loaded": lambda: check_whisper_loaded("medium"),
         },
         {
             "model_name": "whisper-large",
             "display_name": "Whisper Large",
-            "hf_repo_id": whisper_large_id,
+            "hf_repo_id": "openai/whisper-large",
             "model_size": "large",
             "check_loaded": lambda: check_whisper_loaded("large"),
         },
@@ -1509,6 +1747,14 @@ async def trigger_model_download(request: models.ModelDownloadRequest):
             "model_size": "0.6B",
             "load_func": lambda: tts.get_tts_model().load_model("0.6B"),
         },
+        "whisper-turbo": {
+            "model_size": "turbo",
+            "load_func": lambda: transcribe.get_whisper_model().load_model("turbo"),
+        },
+        "whisper-large-v3": {
+            "model_size": "large-v3",
+            "load_func": lambda: transcribe.get_whisper_model().load_model("large-v3"),
+        },
         "whisper-base": {
             "model_size": "base",
             "load_func": lambda: transcribe.get_whisper_model().load_model("base"),
@@ -1584,6 +1830,16 @@ async def delete_model(model_name: str):
             "hf_repo_id": "Qwen/Qwen3-TTS-12Hz-0.6B-Base",
             "model_size": "0.6B",
             "model_type": "tts",
+        },
+        "whisper-turbo": {
+            "hf_repo_id": "openai/whisper-large-v3-turbo",
+            "model_size": "turbo",
+            "model_type": "whisper",
+        },
+        "whisper-large-v3": {
+            "hf_repo_id": "openai/whisper-large-v3",
+            "model_size": "large-v3",
+            "model_type": "whisper",
         },
         "whisper-base": {
             "hf_repo_id": "openai/whisper-base",
@@ -1721,10 +1977,25 @@ async def get_active_tasks():
             text_preview=gen_task.text_preview,
             started_at=gen_task.started_at,
         ))
+
+    # Get active recording-processing tasks
+    active_recording_processing = []
+    for recording_task in task_manager.get_active_recording_tasks():
+        active_recording_processing.append(models.ActiveRecordingProcessingTask(
+            task_id=recording_task.task_id,
+            stage=recording_task.stage,
+            status=recording_task.status,
+            progress=recording_task.progress,
+            message=recording_task.message,
+            error=recording_task.error,
+            started_at=recording_task.started_at,
+            updated_at=recording_task.updated_at,
+        ))
     
     return models.ActiveTasksResponse(
         downloads=active_downloads,
         generations=active_generations,
+        recording_processing=active_recording_processing,
     )
 
 

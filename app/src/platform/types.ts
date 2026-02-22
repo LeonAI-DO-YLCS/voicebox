@@ -37,12 +37,17 @@ export interface AudioDevice {
   id: string;
   name: string;
   is_default: boolean;
+  availability?: 'available' | 'disconnected';
+  permission_state?: 'granted' | 'denied' | 'prompt' | 'unknown';
+  host?: string;
+  diagnostics?: string;
 }
 
 export interface PlatformAudio {
   isSystemAudioSupported(): boolean;
-  startSystemAudioCapture(maxDurationSecs: number): Promise<void>;
+  startSystemAudioCapture(maxDurationSecs: number, inputDeviceId?: string | null): Promise<void>;
   stopSystemAudioCapture(): Promise<Blob>;
+  listSystemAudioInputDevices(): Promise<AudioDevice[]>;
   listOutputDevices(): Promise<AudioDevice[]>;
   playToDevices(audioData: Uint8Array, deviceIds: string[]): Promise<void>;
   stopPlayback(): void;

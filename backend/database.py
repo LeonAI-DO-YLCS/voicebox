@@ -35,6 +35,12 @@ class ProfileSample(Base):
     profile_id = Column(String, ForeignKey("profiles.id"), nullable=False)
     audio_path = Column(String, nullable=False)
     reference_text = Column(Text, nullable=False)
+    selection_start_ms = Column(Integer, nullable=False, default=0)
+    selection_end_ms = Column(Integer, nullable=False, default=0)
+    source_duration_ms = Column(Integer, nullable=False, default=0)
+    selection_metrics_json = Column(Text, nullable=True)
+    selection_fallback_reason = Column(Text, nullable=True)
+    selection_policy_version = Column(String, nullable=True)
 
 
 class Generation(Base):
@@ -287,6 +293,51 @@ def _run_migrations(engine):
                 conn.execute(text("ALTER TABLE profiles ADD COLUMN avatar_path VARCHAR"))
                 conn.commit()
                 print("Added avatar_path column to profiles")
+
+    # Migration: Add selection metadata columns to profile_samples table
+    if 'profile_samples' in inspector.get_table_names():
+        columns = {col['name'] for col in inspector.get_columns('profile_samples')}
+        migrations = [
+            (
+                'selection_start_ms',
+                "ALTER TABLE profile_samples ADD COLUMN selection_start_ms INTEGER NOT NULL DEFAULT 0",
+                "Added selection_start_ms column to profile_samples",
+            ),
+            (
+                'selection_end_ms',
+                "ALTER TABLE profile_samples ADD COLUMN selection_end_ms INTEGER NOT NULL DEFAULT 0",
+                "Added selection_end_ms column to profile_samples",
+            ),
+            (
+                'source_duration_ms',
+                "ALTER TABLE profile_samples ADD COLUMN source_duration_ms INTEGER NOT NULL DEFAULT 0",
+                "Added source_duration_ms column to profile_samples",
+            ),
+            (
+                'selection_metrics_json',
+                "ALTER TABLE profile_samples ADD COLUMN selection_metrics_json TEXT",
+                "Added selection_metrics_json column to profile_samples",
+            ),
+            (
+                'selection_fallback_reason',
+                "ALTER TABLE profile_samples ADD COLUMN selection_fallback_reason TEXT",
+                "Added selection_fallback_reason column to profile_samples",
+            ),
+            (
+                'selection_policy_version',
+                "ALTER TABLE profile_samples ADD COLUMN selection_policy_version VARCHAR",
+                "Added selection_policy_version column to profile_samples",
+            ),
+        ]
+
+        for column_name, statement, success_message in migrations:
+            if column_name not in columns:
+                print(f"Migrating profile_samples: adding {column_name} column")
+                with engine.connect() as conn:
+                    conn.execute(text(statement))
+                    conn.commit()
+                print(success_message)
+                columns.add(column_name)
 
 
 def get_db():

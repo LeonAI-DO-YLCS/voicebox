@@ -4,18 +4,42 @@
 mod audio_capture;
 mod audio_output;
 
-use std::sync::Mutex;
+use std::sync::{Mutex, OnceLock};
 use tauri::{command, State, Manager, WindowEvent, Emitter, Listener, RunEvent};
 use tauri_plugin_shell::ShellExt;
 use tokio::sync::mpsc;
 
 const LEGACY_PORT: u16 = 8000;
-const SERVER_PORT: u16 = 17493;
+const DEFAULT_SERVER_PORT: u16 = 17493;
+
+fn get_server_port() -> u16 {
+    static SERVER_PORT: OnceLock<u16> = OnceLock::new();
+    *SERVER_PORT.get_or_init(|| {
+        std::env::var("VOICEBOX_SERVER_PORT")
+            .ok()
+            .and_then(|value| value.parse::<u16>().ok())
+            .filter(|port| *port > 0)
+            .unwrap_or(DEFAULT_SERVER_PORT)
+    })
+}
 
 struct ServerState {
     child: Mutex<Option<tauri_plugin_shell::process::CommandChild>>,
     server_pid: Mutex<Option<u32>>,
     keep_running_on_close: Mutex<bool>,
+    start_in_progress: Mutex<bool>,
+}
+
+struct StartupGuard<'a> {
+    flag: &'a Mutex<bool>,
+}
+
+impl Drop for StartupGuard<'_> {
+    fn drop(&mut self) {
+        if let Ok(mut locked) = self.flag.lock() {
+            *locked = false;
+        }
+    }
 }
 
 #[command]
@@ -24,9 +48,40 @@ async fn start_server(
     state: State<'_, ServerState>,
     remote: Option<bool>,
 ) -> Result<String, String> {
+    // If another start attempt is already in flight, wait briefly for readiness
+    // instead of spawning a second sidecar process.
+    {
+        let starting = *state.start_in_progress.lock().unwrap();
+        if starting {
+            use std::net::TcpStream;
+            use std::time::Duration;
+
+            for _ in 0..60 {
+                if TcpStream::connect_timeout(
+                    &format!("127.0.0.1:{}", get_server_port()).parse().unwrap(),
+                    Duration::from_millis(200),
+                )
+                .is_ok()
+                {
+                    return Ok(format!("http://127.0.0.1:{}", get_server_port()));
+                }
+                std::thread::sleep(Duration::from_millis(100));
+            }
+            return Err("Server startup already in progress but did not become ready in time".to_string());
+        }
+    }
+
+    {
+        let mut starting = state.start_in_progress.lock().unwrap();
+        *starting = true;
+    }
+    let _startup_guard = StartupGuard {
+        flag: &state.start_in_progress,
+    };
+
     // Check if server is already running (managed by this app instance)
     if state.child.lock().unwrap().is_some() {
-        return Ok(format!("http://127.0.0.1:{}", SERVER_PORT));
+        return Ok(format!("http://127.0.0.1:{}", get_server_port()));
     }
 
     // Check if a voicebox server is already running on our port (from previous session with keep_running=true)
@@ -34,7 +89,7 @@ async fn start_server(
     {
         use std::process::Command;
         if let Ok(output) = Command::new("lsof")
-            .args(["-i", &format!(":{}", SERVER_PORT), "-sTCP:LISTEN"])
+            .args(["-i", &format!(":{}", get_server_port()), "-sTCP:LISTEN"])
             .output()
         {
             let output_str = String::from_utf8_lossy(&output.stdout);
@@ -43,12 +98,25 @@ async fn start_server(
                 if parts.len() >= 2 {
                     let command = parts[0];
                     let pid_str = parts[1];
-                    if command.contains("voicebox") {
+                    let mut is_voicebox_server = command.contains("voicebox");
+                    if !is_voicebox_server {
+                        if let Ok(ps_output) = Command::new("ps")
+                            .args(["-p", pid_str, "-o", "command="])
+                            .output()
+                        {
+                            let cmdline = String::from_utf8_lossy(&ps_output.stdout).to_lowercase();
+                            is_voicebox_server = cmdline.contains("voicebox")
+                                || cmdline.contains("backend.main")
+                                || cmdline.contains("uvicorn");
+                        }
+                    }
+
+                    if is_voicebox_server {
                         if let Ok(pid) = pid_str.parse::<u32>() {
-                            println!("Found existing voicebox-server on port {} (PID: {}), reusing it", SERVER_PORT, pid);
+                            println!("Found existing voicebox-server on port {} (PID: {}), reusing it", get_server_port(), pid);
                             // Store the PID so we can kill it on exit if needed
                             *state.server_pid.lock().unwrap() = Some(pid);
-                            return Ok(format!("http://127.0.0.1:{}", SERVER_PORT));
+                            return Ok(format!("http://127.0.0.1:{}", get_server_port()));
                         }
                     }
                 }
@@ -65,7 +133,7 @@ async fn start_server(
         {
             let output_str = String::from_utf8_lossy(&output.stdout);
             for line in output_str.lines() {
-                if line.contains(&format!(":{}", SERVER_PORT)) && line.contains("LISTENING") {
+                if line.contains(&format!(":{}", get_server_port())) && line.contains("LISTENING") {
                     if let Some(pid_str) = line.split_whitespace().last() {
                         if let Ok(pid) = pid_str.parse::<u32>() {
                             if let Ok(tasklist_output) = Command::new("tasklist")
@@ -74,10 +142,10 @@ async fn start_server(
                             {
                                 let tasklist_str = String::from_utf8_lossy(&tasklist_output.stdout);
                                 if tasklist_str.to_lowercase().contains("voicebox") {
-                                    println!("Found existing voicebox-server on port {} (PID: {}), reusing it", SERVER_PORT, pid);
+                                    println!("Found existing voicebox-server on port {} (PID: {}), reusing it", get_server_port(), pid);
                                     // Store the PID so we can kill it on exit if needed
                                     *state.server_pid.lock().unwrap() = Some(pid);
-                                    return Ok(format!("http://127.0.0.1:{}", SERVER_PORT));
+                                    return Ok(format!("http://127.0.0.1:{}", get_server_port()));
                                 }
                             }
                         }
@@ -188,21 +256,21 @@ async fn start_server(
             // In dev mode, check if the server is already running (started manually)
             #[cfg(debug_assertions)]
             {
-                eprintln!("Dev mode: Checking if server is already running on port {}...", SERVER_PORT);
+                eprintln!("Dev mode: Checking if server is already running on port {}...", get_server_port());
 
                 // Try to connect to the server port
                 use std::net::TcpStream;
                 if TcpStream::connect_timeout(
-                    &format!("127.0.0.1:{}", SERVER_PORT).parse().unwrap(),
+                    &format!("127.0.0.1:{}", get_server_port()).parse().unwrap(),
                     std::time::Duration::from_secs(1),
                 ).is_ok() {
-                    println!("Found server already running on port {}", SERVER_PORT);
-                    return Ok(format!("http://127.0.0.1:{}", SERVER_PORT));
+                    println!("Found server already running on port {}", get_server_port());
+                    return Ok(format!("http://127.0.0.1:{}", get_server_port()));
                 }
 
                 eprintln!("");
                 eprintln!("=================================================================");
-                eprintln!("DEV MODE: No server found on port {}", SERVER_PORT);
+                eprintln!("DEV MODE: No server found on port {}", get_server_port());
                 eprintln!("");
                 eprintln!("Start the Python server in a separate terminal:");
                 eprintln!("  bun run dev:server");
@@ -223,7 +291,7 @@ async fn start_server(
             .to_str()
             .ok_or_else(|| "Invalid data dir path".to_string())?,
         "--port",
-        &SERVER_PORT.to_string(),
+        &get_server_port().to_string(),
     ]);
 
     if remote.unwrap_or(false) {
@@ -243,11 +311,11 @@ async fn start_server(
             {
                 use std::net::TcpStream;
                 if TcpStream::connect_timeout(
-                    &format!("127.0.0.1:{}", SERVER_PORT).parse().unwrap(),
+                    &format!("127.0.0.1:{}", get_server_port()).parse().unwrap(),
                     std::time::Duration::from_secs(1),
                 ).is_ok() {
-                    println!("Found manually-started server on port {}", SERVER_PORT);
-                    return Ok(format!("http://127.0.0.1:{}", SERVER_PORT));
+                    println!("Found manually-started server on port {}", get_server_port());
+                    return Ok(format!("http://127.0.0.1:{}", get_server_port()));
                 }
 
                 eprintln!("");
@@ -302,13 +370,13 @@ async fn start_server(
             {
                 use std::net::TcpStream;
                 if TcpStream::connect_timeout(
-                    &format!("127.0.0.1:{}", SERVER_PORT).parse().unwrap(),
+                    &format!("127.0.0.1:{}", get_server_port()).parse().unwrap(),
                     std::time::Duration::from_secs(1),
                 ).is_ok() {
                     // Kill the placeholder process
                     let _ = state.child.lock().unwrap().take();
-                    println!("Found manually-started server on port {}", SERVER_PORT);
-                    return Ok(format!("http://127.0.0.1:{}", SERVER_PORT));
+                    println!("Found manually-started server on port {}", get_server_port());
+                    return Ok(format!("http://127.0.0.1:{}", get_server_port()));
                 }
             }
 
@@ -354,14 +422,14 @@ async fn start_server(
 
                     // Check if a manually-started server is available
                     if TcpStream::connect_timeout(
-                        &format!("127.0.0.1:{}", SERVER_PORT).parse().unwrap(),
+                        &format!("127.0.0.1:{}", get_server_port()).parse().unwrap(),
                         std::time::Duration::from_secs(1),
                     ).is_ok() {
                         // Clean up state
                         let _ = state.child.lock().unwrap().take();
                         let _ = state.server_pid.lock().unwrap().take();
-                        println!("Found manually-started server on port {}", SERVER_PORT);
-                        return Ok(format!("http://127.0.0.1:{}", SERVER_PORT));
+                        println!("Found manually-started server on port {}", get_server_port());
+                        return Ok(format!("http://127.0.0.1:{}", get_server_port()));
                     }
 
                     eprintln!("");
@@ -391,7 +459,7 @@ async fn start_server(
     }
 
     // Spawn task to continue reading output
-    tokio::spawn(async move {
+    tauri::async_runtime::spawn(async move {
         while let Some(event) = rx.recv().await {
             match event {
                 tauri_plugin_shell::process::CommandEvent::Stdout(line) => {
@@ -405,7 +473,7 @@ async fn start_server(
         }
     });
 
-    Ok(format!("http://127.0.0.1:{}", SERVER_PORT))
+    Ok(format!("http://127.0.0.1:{}", get_server_port()))
 }
 
 /// Check if a Windows process is still running
@@ -499,7 +567,7 @@ async fn stop_server(state: State<'_, ServerState>) -> Result<(), String> {
                 .unwrap();
 
             let shutdown_result = client
-                .post(&format!("http://127.0.0.1:{}/shutdown", SERVER_PORT))
+                .post(&format!("http://127.0.0.1:{}/shutdown", get_server_port()))
                 .send();
 
             if shutdown_result.is_ok() {
@@ -558,8 +626,9 @@ fn set_keep_server_running(state: State<'_, ServerState>, keep_running: bool) {
 async fn start_system_audio_capture(
     state: State<'_, audio_capture::AudioCaptureState>,
     max_duration_secs: u32,
+    device_id: Option<String>,
 ) -> Result<(), String> {
-    audio_capture::start_capture(&state, max_duration_secs).await
+    audio_capture::start_capture(&state, max_duration_secs, device_id).await
 }
 
 #[command]
@@ -572,6 +641,11 @@ async fn stop_system_audio_capture(
 #[command]
 fn is_system_audio_supported() -> bool {
     audio_capture::is_supported()
+}
+
+#[command]
+fn list_system_audio_input_devices() -> Result<Vec<audio_capture::AudioInputDevice>, String> {
+    audio_capture::list_input_devices()
 }
 
 #[command]
@@ -607,6 +681,7 @@ pub fn run() {
             child: Mutex::new(None),
             server_pid: Mutex::new(None),
             keep_running_on_close: Mutex::new(false),
+            start_in_progress: Mutex::new(false),
         })
         .manage(audio_capture::AudioCaptureState::new())
         .manage(audio_output::AudioOutputState::new())
@@ -644,6 +719,7 @@ pub fn run() {
             start_system_audio_capture,
             stop_system_audio_capture,
             is_system_audio_supported,
+            list_system_audio_input_devices,
             list_audio_output_devices,
             play_audio_to_devices,
             stop_audio_playback
@@ -675,7 +751,7 @@ pub fn run() {
                 });
 
                 // Wait for frontend response or timeout
-                tokio::spawn(async move {
+                tauri::async_runtime::spawn(async move {
                     tokio::select! {
                         _ = rx.recv() => {
                             // Frontend responded, close window
@@ -763,7 +839,7 @@ pub fn run() {
                                     .unwrap();
 
                                 let shutdown_result = client
-                                    .post(&format!("http://127.0.0.1:{}/shutdown", SERVER_PORT))
+                                    .post(&format!("http://127.0.0.1:{}/shutdown", get_server_port()))
                                     .send();
 
                                 if shutdown_result.is_ok() {

@@ -215,30 +215,22 @@ This is expected behavior. The first generation downloads the Qwen3-TTS model (~
     python --version
     ```
 
-    If not, install Python 3.11+ and recreate the virtual environment.
+    If not, install Python 3.11+ and recreate the uv environment.
   </Accordion>
 
-  <Accordion title="Virtual Environment">
-    Ensure venv is activated:
+  <Accordion title="Python Environment (uv)">
+    Ensure uv-managed environment exists:
 
     ```bash
-    # macOS/Linux
-    source backend/venv/bin/activate
-
-    # Windows
-    backend\venv\Scripts\activate
+    bun run setup:python
     ```
-
-    You should see `(venv)` in your prompt.
   </Accordion>
 
   <Accordion title="Dependencies">
     Reinstall dependencies:
 
     ```bash
-    cd backend
-    pip install -r requirements.txt
-    pip install git+https://github.com/QwenLM/Qwen3-TTS.git
+    bun run setup:python
     ```
   </Accordion>
 </AccordionGroup>
@@ -275,7 +267,7 @@ bun run tauri build
 <Steps>
   <Step title="Ensure Backend is Running">
     ```bash
-    curl http://localhost:17493/openapi.json
+    curl http://127.0.0.1:17493/openapi.json
     ```
 
     Should return JSON. If not, start the backend.
@@ -287,9 +279,7 @@ bun run tauri build
 
   <Step title="Regenerate Manually">
     ```bash
-    cd backend
-    source venv/bin/activate
-    uvicorn main:app --reload --port 17493
+    bun run dev:server
 
     # In another terminal
     ./scripts/generate-api.sh

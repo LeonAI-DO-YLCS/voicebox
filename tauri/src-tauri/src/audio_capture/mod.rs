@@ -17,6 +17,17 @@ use std::sync::{Arc, Mutex};
 #[cfg(target_os = "macos")]
 use screencapturekit::stream::sc_stream::SCStream;
 
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct AudioInputDevice {
+    pub id: String,
+    pub name: String,
+    pub is_default: bool,
+    pub availability: String,
+    pub permission_state: String,
+    pub host: Option<String>,
+    pub diagnostics: Option<String>,
+}
+
 pub struct AudioCaptureState {
     pub samples: Arc<Mutex<Vec<f32>>>,
     pub sample_rate: Arc<Mutex<u32>>,

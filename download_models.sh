@@ -4,7 +4,7 @@
 
 set -e
 
-MODELS_DIR="$(dirname "$0")/models"
+MODELS_DIR="$(cd "$(dirname "$0")" && pwd)/models"
 cd "$MODELS_DIR"
 
 echo "============================================================"
@@ -21,7 +21,7 @@ echo "============================================================"
 echo "Setting up: Qwen3-TTS-12Hz-1.7B-Base"
 echo "============================================================"
 
-QWEN_DIR="Qwen3-TTS-12Hz-1.7B-Base"
+QWEN_DIR="$MODELS_DIR/Qwen3-TTS-12Hz-1.7B-Base"
 mkdir -p "$QWEN_DIR"
 mkdir -p "$QWEN_DIR/speech_tokenizer"
 
@@ -45,13 +45,13 @@ wget -q -O "$QWEN_DIR/speech_tokenizer/model.safetensors" "$QWEN_REPO/speech_tok
 # Copy existing model weights
 echo ""
 echo "Copying existing model weights..."
-if [ -f "Qwen TTS 1.7B.model.safetensors" ]; then
-    cp "Qwen TTS 1.7B.model.safetensors" "$QWEN_DIR/model.safetensors"
+if [ -f "$MODELS_DIR/Qwen TTS 1.7B.model.safetensors" ]; then
+    cp "$MODELS_DIR/Qwen TTS 1.7B.model.safetensors" "$QWEN_DIR/model.safetensors"
     echo "  ✓ Model weights copied (3.6 GB)"
 else
     echo "  ⚠ Warning: Qwen TTS 1.7B.model.safetensors not found!"
-    echo "    Downloading from HuggingFace..."
-    wget -q -O "$QWEN_DIR/model.safetensors" "$QWEN_REPO/model.safetensors" && echo "  ✓ model.safetensors downloaded"
+    echo "    Downloading from HuggingFace (this will take a while)..."
+    wget -q --show-progress -O "$QWEN_DIR/model.safetensors" "$QWEN_REPO/model.safetensors" && echo "  ✓ model.safetensors downloaded"
 fi
 
 # ============================================
@@ -62,7 +62,7 @@ echo "============================================================"
 echo "Setting up: whisper-large-v3-turbo"
 echo "============================================================"
 
-WHISPER_DIR="whisper-large-v3-turbo"
+WHISPER_DIR="$MODELS_DIR/whisper-large-v3-turbo"
 mkdir -p "$WHISPER_DIR"
 
 WHISPER_REPO="https://huggingface.co/openai/whisper-large-v3-turbo/resolve/main"
@@ -82,13 +82,13 @@ wget -q -O "$WHISPER_DIR/vocab.json" "$WHISPER_REPO/vocab.json" && echo "  ✓ v
 # Copy existing model weights
 echo ""
 echo "Copying existing model weights..."
-if [ -f "Whisper Largev3..safetensors" ]; then
-    cp "Whisper Largev3..safetensors" "$WHISPER_DIR/model.safetensors"
+if [ -f "$MODELS_DIR/Whisper Largev3..safetensors" ]; then
+    cp "$MODELS_DIR/Whisper Largev3..safetensors" "$WHISPER_DIR/model.safetensors"
     echo "  ✓ Model weights copied (1.5 GB)"
 else
     echo "  ⚠ Warning: Whisper Largev3..safetensors not found!"
     echo "    Downloading from HuggingFace..."
-    wget -q -O "$WHISPER_DIR/model.safetensors" "$WHISPER_REPO/model.safetensors" && echo "  ✓ model.safetensors downloaded"
+    wget -q --show-progress -O "$WHISPER_DIR/model.safetensors" "$WHISPER_REPO/model.safetensors" && echo "  ✓ model.safetensors downloaded"
 fi
 
 # ============================================
@@ -100,16 +100,16 @@ echo "SETUP COMPLETE!"
 echo "============================================================"
 echo ""
 echo "Model directories created:"
-echo "  $MODELS_DIR/$QWEN_DIR"
-echo "  $MODELS_DIR/$WHISPER_DIR"
+echo "  $QWEN_DIR"
+echo "  $WHISPER_DIR"
 echo ""
 echo "Directory contents:"
 echo ""
 echo "Qwen3-TTS:"
-ls -lh "$QWEN_DIR" | head -20
+ls -lh "$QWEN_DIR"
 echo ""
 echo "Whisper:"
-ls -lh "$WHISPER_DIR" | head -20
+ls -lh "$WHISPER_DIR"
 echo ""
 echo "============================================================"
 echo "HOW TO USE WITH VOICEBOX"

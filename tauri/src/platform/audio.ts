@@ -7,9 +7,13 @@ export const tauriAudio: PlatformAudio = {
     return true; // Tauri supports it, but actual support depends on platform
   },
 
-  async startSystemAudioCapture(maxDurationSecs: number): Promise<void> {
+  async startSystemAudioCapture(
+    maxDurationSecs: number,
+    inputDeviceId?: string | null,
+  ): Promise<void> {
     await invoke('start_system_audio_capture', {
       maxDurationSecs,
+      deviceId: inputDeviceId ?? null,
     });
   },
 
@@ -24,6 +28,10 @@ export const tauriAudio: PlatformAudio = {
     }
 
     return new Blob([bytes], { type: 'audio/wav' });
+  },
+
+  async listSystemAudioInputDevices(): Promise<AudioDevice[]> {
+    return await invoke<AudioDevice[]>('list_system_audio_input_devices');
   },
 
   async listOutputDevices(): Promise<AudioDevice[]> {

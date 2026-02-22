@@ -103,7 +103,7 @@ chmod +x voicebox-*.AppImage
 
 2. **Check MLX installation**
    ```bash
-   pip install -r backend/requirements-mlx.txt
+   bun run setup:python
    ```
 
 3. **Verify backend detection**
@@ -126,6 +126,40 @@ chmod +x voicebox-*.AppImage
 3. **Check browser permissions** (web version)
    - Allow audio autoplay in browser settings
 
+### "Microphone access denied" in recording UI
+
+**Symptoms:** "Recording error" shows permission denied or request blocked.
+
+**Solutions:**
+1. **Desktop permissions**
+   - Windows: Settings → Privacy & Security → Microphone
+   - Enable both "Microphone access" and "Let desktop apps access your microphone"
+2. **Restart Voicebox**
+   - Permission changes often require app restart
+3. **Use System Audio tab**
+   - In Tauri runtime, native capture can still work when webview `getUserMedia` is denied
+
+### "No Linux input devices found" on WSL2
+
+**Symptoms:** System Audio tab shows no devices or capture fails immediately.
+
+**Solutions:**
+1. **Verify WSLg PulseAudio bridge**
+   ```bash
+   echo "$PULSE_SERVER"
+   pactl info
+   pactl list short sources
+   ```
+2. **Install ALSA/Pulse plugins (inside WSL)**
+   ```bash
+   sudo apt-get update
+   sudo apt-get install -y libasound2-plugins pulseaudio-utils alsa-utils
+   ```
+3. **Confirm Windows privacy settings**
+   - Enable microphone access for desktop apps
+4. **Refresh devices in app**
+   - Use the refresh icon in System Audio tab after host settings change
+
 ### Slow generation
 
 **Symptoms:** Generation takes >30 seconds
@@ -134,7 +168,7 @@ chmod +x voicebox-*.AppImage
 1. **Check backend type** (Apple Silicon)
    - Check Settings → Server Status
    - Should show "Backend: MLX" on Apple Silicon
-   - If showing "Backend: PYTORCH", install MLX: `pip install -r backend/requirements-mlx.txt`
+   - If showing "Backend: PYTORCH", run `bun run setup:python` to reinstall MLX-capable backend deps
    - MLX provides 4-5x faster inference on Apple Silicon
 
 2. **Use GPU** (if available)
@@ -162,7 +196,7 @@ chmod +x voicebox-*.AppImage
 **Solutions:**
 1. **Check server is running**
    ```bash
-   curl http://localhost:8000/health
+   curl http://127.0.0.1:17493/health
    ```
 
 2. **Check remote mode**
@@ -170,7 +204,7 @@ chmod +x voicebox-*.AppImage
    - Check firewall settings
 
 3. **Check port availability**
-   - Default port is 8000
+   - Default backend port is 17493 (auto-falls forward if occupied)
    - Ensure no other service is using it
 
 ### CORS errors in browser
@@ -276,7 +310,7 @@ chmod +x voicebox-*.AppImage
 
 2. **Check OpenAPI endpoint**
    ```bash
-   curl http://localhost:8000/openapi.json
+   curl http://127.0.0.1:17493/openapi.json
    ```
 
 3. **Regenerate client**

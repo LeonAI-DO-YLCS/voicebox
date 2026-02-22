@@ -208,16 +208,14 @@ See [CONTRIBUTING.md](/development/contributing) for the full release workflow.
 <AccordionGroup>
   <Accordion title="Server Binary Build Fails">
     **Common issues:**
-    - Missing Python dependencies: `pip install -r requirements.txt`
-    - PyInstaller not found: `pip install pyinstaller`
-    - Qwen3-TTS not installed: `pip install git+https://github.com/QwenLM/Qwen3-TTS.git`
+    - Missing Python dependencies in `backend/.venv`
+    - `uv` not installed
+    - Environment not bootstrapped with project script
 
     **Solution:**
     ```bash
-    cd backend
-    source venv/bin/activate
-    pip install -r requirements.txt
-    pip install pyinstaller
+    bun run setup:python
+    ./scripts/build-server.sh
     ```
   </Accordion>
 

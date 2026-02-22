@@ -62,9 +62,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Self-documenting help system with `make help`
   - Colored output for better readability
   - Supports parallel development server execution
+- **Configurable voice clone reference policy** with backend-owned limits and frontend synchronization
+  - New `GET /voice-clone/policy` endpoint for effective policy values
+  - Bounded quality-aware segment selection for long reference samples
+  - Selection metadata persisted for traceability (`selection_*` fields)
 
 ### Changed
 - **README** - Added Makefile reference and updated Quick Start with Makefile-based setup instructions alongside manual setup
+- **Voice sample validation** - Replaced fixed 30-second behavior with configurable `hard_min`, `recommended_target`, and `hard_max` policy controls
+
+### Compatibility
+- Existing profile and generation APIs remain backward compatible; response payloads only add optional sample metadata fields.
+- Default runtime behavior remains conservative with startup-time fallback to safe defaults on invalid policy config.
+
+### Rollback
+- To quickly revert to stricter legacy behavior, set:
+  - `VOICE_CLONE_REF_HARD_MIN_SECONDS=2`
+  - `VOICE_CLONE_REF_RECOMMENDED_TARGET_SECONDS=15`
+  - `VOICE_CLONE_REF_HARD_MAX_SECONDS=30`
+  - `VOICE_CLONE_REF_CAPTURE_AUTO_STOP_SECONDS=29`
+- Restart backend after policy changes.
 
 ---
 

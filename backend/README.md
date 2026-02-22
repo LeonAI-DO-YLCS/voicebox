@@ -55,6 +55,9 @@ Root endpoint with version info.
 #### `GET /health`
 Health check with model status.
 
+#### `GET /voice-clone/policy`
+Get effective voice clone policy values used by backend validation and frontend messaging.
+
 **Response:**
 ```json
 {
@@ -124,7 +127,13 @@ Add a sample to a profile.
   "id": "sample-uuid",
   "profile_id": "profile-uuid",
   "audio_path": "/path/to/sample.wav",
-  "reference_text": "This is my voice"
+  "reference_text": "This is my voice",
+  "selection_start_ms": 500,
+  "selection_end_ms": 15500,
+  "source_duration_ms": 22200,
+  "selection_metrics_json": "{\"rms\":0.08,\"silence_ratio\":0.1,\"clipping_ratio\":0.0}",
+  "selection_fallback_reason": null,
+  "selection_policy_version": "v1"
 }
 ```
 
@@ -245,6 +254,33 @@ Unload TTS model to free memory.
 - `profile_id`: Foreign key to profiles
 - `audio_path`: Path to audio file
 - `reference_text`: Transcript
+- `selection_start_ms`: Selected segment start offset
+- `selection_end_ms`: Selected segment end offset
+- `source_duration_ms`: Original source duration
+- `selection_metrics_json`: Quality metrics snapshot
+- `selection_fallback_reason`: Deterministic fallback reason (if used)
+- `selection_policy_version`: Policy version tag for traceability
+
+## Voice Clone Policy Tuning
+
+Voice reference behavior is configurable with environment variables:
+
+- `VOICE_CLONE_REF_HARD_MIN_SECONDS` (default `2`)
+- `VOICE_CLONE_REF_RECOMMENDED_TARGET_SECONDS` (default `15`)
+- `VOICE_CLONE_REF_HARD_MAX_SECONDS` (default `60`)
+- `VOICE_CLONE_REF_CAPTURE_AUTO_STOP_SECONDS` (default `29`)
+- `VOICE_CLONE_REF_MIN_RMS` (default `0.01`)
+- `VOICE_CLONE_REF_MAX_SILENCE_RATIO` (default `0.45`)
+- `VOICE_CLONE_REF_MAX_CLIPPING_RATIO` (default `0.02`)
+- `VOICE_CLONE_REF_SELECTION_STEP_SECONDS` (default `0.5`)
+- `VOICE_CLONE_REF_POLICY_VERSION` (default `v1`)
+
+Tuning recommendations:
+
+- Increase `recommended_target_seconds` before increasing `hard_max_seconds`.
+- Keep `hard_max_seconds` bounded to control memory/latency.
+- Keep `capture_auto_stop_seconds <= hard_max_seconds`.
+- Watch `selection_fallback_reason` and `selection_metrics_json` to calibrate thresholds.
 
 ### generations
 - `id`: UUID primary key

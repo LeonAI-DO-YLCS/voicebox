@@ -13,18 +13,16 @@ GET /profiles
 
 **Response:**
 ```json
-{
-  "profiles": [
-    {
-      "id": "abc123",
-      "name": "John Smith",
-      "language": "en",
-      "description": "Professional narrator",
-      "created_at": "2024-01-29T12:00:00Z",
-      "sample_count": 2
-    }
-  ]
-}
+[
+  {
+    "id": "abc123",
+    "name": "John Smith",
+    "language": "en",
+    "description": "Professional narrator",
+    "created_at": "2024-01-29T12:00:00Z",
+    "updated_at": "2024-01-29T12:00:00Z"
+  }
+]
 ```
 
 ### Get Profile
@@ -41,13 +39,7 @@ GET /profiles/{id}
   "language": "en",
   "description": "Professional narrator",
   "created_at": "2024-01-29T12:00:00Z",
-  "samples": [
-    {
-      "id": "sample123",
-      "duration": 15.5,
-      "created_at": "2024-01-29T12:00:00Z"
-    }
-  ]
+  "updated_at": "2024-01-29T12:00:00Z"
 }
 ```
 
@@ -112,14 +104,46 @@ POST /profiles/{id}/samples
 
 **Request:** (multipart/form-data)
 ```
-audio: <file>
+file: <audio file>
+reference_text: <exact transcript>
 ```
 
 **Response:**
 ```json
 {
-  "sample_id": "sample123",
-  "duration": 15.5
+  "id": "sample123",
+  "profile_id": "abc123",
+  "audio_path": "data/profiles/abc123/sample123.wav",
+  "reference_text": "Hello world",
+  "selection_start_ms": 500,
+  "selection_end_ms": 15500,
+  "source_duration_ms": 22200,
+  "selection_metrics_json": "{\"rms\":0.08,\"silence_ratio\":0.1,\"clipping_ratio\":0.0}",
+  "selection_fallback_reason": null,
+  "selection_policy_version": "v1"
+}
+```
+
+### Get Voice Clone Policy
+
+```http
+GET /voice-clone/policy
+```
+
+Returns effective backend policy so the UI and clients can match validation and messaging.
+
+**Response:**
+```json
+{
+  "hard_min_seconds": 2.0,
+  "recommended_target_seconds": 15.0,
+  "hard_max_seconds": 60.0,
+  "capture_auto_stop_seconds": 29,
+  "min_rms": 0.01,
+  "max_silence_ratio": 0.45,
+  "max_clipping_ratio": 0.02,
+  "selection_step_seconds": 0.5,
+  "policy_version": "v1"
 }
 ```
 

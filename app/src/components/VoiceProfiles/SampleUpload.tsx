@@ -19,14 +19,19 @@ import {
   FormLabel,
   FormMessage,
 } from '@/components/ui/form';
+import { Progress } from '@/components/ui/progress';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Textarea } from '@/components/ui/textarea';
 import { useToast } from '@/components/ui/use-toast';
+import { getErrorDisplayDetails } from '@/lib/errors';
 import { useAudioPlayer } from '@/lib/hooks/useAudioPlayer';
 import { useAudioRecording } from '@/lib/hooks/useAudioRecording';
-import { useAddSample, useProfile } from '@/lib/hooks/useProfiles';
+import { useAddSample, useProfile, useVoiceCloneReferencePolicy } from '@/lib/hooks/useProfiles';
+import { useRecordingProcessingProgress } from '@/lib/hooks/useRecordingProcessingProgress';
 import { useSystemAudioCapture } from '@/lib/hooks/useSystemAudioCapture';
 import { useTranscription } from '@/lib/hooks/useTranscription';
+import { RECORDING_PROCESSING_STAGE_LABELS } from '@/lib/recording/processing';
+import { formatAudioDuration, getAudioDuration } from '@/lib/utils/audio';
 import { usePlatform } from '@/platform/PlatformContext';
 import { AudioSampleRecording } from './AudioSampleRecording';
 import { AudioSampleSystem } from './AudioSampleSystem';
@@ -42,6 +47,13 @@ const sampleSchema = z.object({
 
 type SampleFormValues = z.infer<typeof sampleSchema>;
 
+const FALLBACK_VOICE_CLONE_POLICY = {
+  hard_min_seconds: 2,
+  recommended_target_seconds: 15,
+  hard_max_seconds: 30,
+  capture_auto_stop_seconds: 29,
+};
+
 interface SampleUploadProps {
   profileId: string;
   open: boolean;
@@ -53,9 +65,19 @@ export function SampleUpload({ profileId, open, onOpenChange }: SampleUploadProp
   const addSample = useAddSample();
   const transcribe = useTranscription();
   const { data: profile } = useProfile(profileId);
+  const { data: voiceClonePolicy } = useVoiceCloneReferencePolicy();
   const { toast } = useToast();
   const [mode, setMode] = useState<'upload' | 'record' | 'system'>('upload');
-  const { isPlaying, playPause, cleanup: cleanupAudio } = useAudioPlayer();
+  const [activeTranscriptionTaskId, setActiveTranscriptionTaskId] = useState<string | null>(null);
+  const { isPlaying, playbackProgress, playPause, cleanup: cleanupAudio } = useAudioPlayer();
+  const effectivePolicy = voiceClonePolicy ?? FALLBACK_VOICE_CLONE_POLICY;
+  const minAudioDurationSeconds = effectivePolicy.hard_min_seconds;
+  const maxAudioDurationSeconds = effectivePolicy.hard_max_seconds;
+  const recommendedAudioDurationSeconds = effectivePolicy.recommended_target_seconds;
+  const captureMaxDurationSeconds = Math.max(
+    1,
+    Math.min(effectivePolicy.capture_auto_stop_seconds, Math.floor(maxAudioDurationSeconds)),
+  );
 
   const form = useForm<SampleFormValues>({
     resolver: zodResolver(sampleSchema),
@@ -65,16 +87,22 @@ export function SampleUpload({ profileId, open, onOpenChange }: SampleUploadProp
   });
 
   const selectedFile = form.watch('file');
+  const { task: activeProcessingTask } = useRecordingProcessingProgress(activeTranscriptionTaskId);
 
   const {
     isRecording,
     duration,
     error: recordingError,
+    lifecycleState: recordingLifecycleState,
+    lifecycleStatus: recordingLifecycleStatus,
+    liveInputLevel,
+    waveformSamples,
+    waveformMode,
     startRecording,
     stopRecording,
     cancelRecording,
   } = useAudioRecording({
-    maxDurationSeconds: 29,
+    maxDurationSeconds: captureMaxDurationSeconds,
     onRecordingComplete: (blob, recordedDuration) => {
       // Convert blob to File object
       const file = new File([blob], `recording-${Date.now()}.webm`, {
@@ -97,11 +125,20 @@ export function SampleUpload({ profileId, open, onOpenChange }: SampleUploadProp
     duration: systemDuration,
     error: systemRecordingError,
     isSupported: isSystemAudioSupported,
+    permissionState: systemPermissionState,
+    lifecycleState: systemLifecycleState,
+    lifecycleStatus: systemLifecycleStatus,
+    inputDevices: systemInputDevices,
+    selectedInputDeviceId,
+    disconnectedDeviceId,
+    setSelectedInputDeviceId,
+    isLoadingInputDevices,
+    refreshInputDevices,
     startRecording: startSystemRecording,
     stopRecording: stopSystemRecording,
     cancelRecording: cancelSystemRecording,
   } = useSystemAudioCapture({
-    maxDurationSeconds: 29,
+    maxDurationSeconds: captureMaxDurationSeconds,
     onRecordingComplete: (blob, recordedDuration) => {
       // Convert blob to File object
       const file = new File([blob], `system-audio-${Date.now()}.wav`, {
@@ -153,21 +190,42 @@ export function SampleUpload({ profileId, open, onOpenChange }: SampleUploadProp
     }
 
     try {
+      const taskId =
+        typeof crypto !== 'undefined' && 'randomUUID' in crypto
+          ? crypto.randomUUID()
+          : `recording-${Date.now()}`;
+      setActiveTranscriptionTaskId(taskId);
       const language = profile?.language as 'en' | 'zh' | undefined;
-      const result = await transcribe.mutateAsync({ file, language });
+      const result = await transcribe.mutateAsync({ file, language, taskId });
+      setActiveTranscriptionTaskId(result.task_id ?? taskId);
 
       form.setValue('referenceText', result.text, { shouldValidate: true });
     } catch (error) {
+      const details = getErrorDisplayDetails(error, 'Transcription failed');
       toast({
-        title: 'Transcription failed',
-        description: error instanceof Error ? error.message : 'Failed to transcribe audio',
+        title: details.title,
+        description: `${details.summary}${details.hint ? ` ${details.hint}` : ''}`,
         variant: 'destructive',
       });
+    } finally {
+      window.setTimeout(() => {
+        setActiveTranscriptionTaskId(null);
+      }, 1500);
     }
   }
 
   async function onSubmit(data: SampleFormValues) {
     try {
+      const duration = await getAudioDuration(data.file as File & { recordedDuration?: number });
+      if (duration < minAudioDurationSeconds || duration > maxAudioDurationSeconds) {
+        const durationText = formatAudioDuration(duration);
+        const minText = formatAudioDuration(minAudioDurationSeconds);
+        const maxText = formatAudioDuration(maxAudioDurationSeconds);
+        throw new Error(
+          `Audio duration ${durationText} is outside allowed bounds (${minText} to ${maxText}).`,
+        );
+      }
+
       await addSample.mutateAsync({
         profileId,
         file: data.file,
@@ -264,6 +322,8 @@ export function SampleUpload({ profileId, open, onOpenChange }: SampleUploadProp
                       isPlaying={isPlaying}
                       isTranscribing={transcribe.isPending}
                       fieldName={name}
+                      recommendedDurationSeconds={recommendedAudioDurationSeconds}
+                      maxDurationSeconds={maxAudioDurationSeconds}
                     />
                   )}
                 />
@@ -278,6 +338,13 @@ export function SampleUpload({ profileId, open, onOpenChange }: SampleUploadProp
                       file={selectedFile}
                       isRecording={isRecording}
                       duration={duration}
+                      lifecycleState={recordingLifecycleState}
+                      lifecycleStatus={recordingLifecycleStatus}
+                      liveInputLevel={liveInputLevel}
+                      waveformSamples={waveformSamples}
+                      waveformMode={waveformMode}
+                      playbackProgress={playbackProgress}
+                      activeProcessingTask={activeProcessingTask}
                       onStart={startRecording}
                       onStop={stopRecording}
                       onCancel={handleCancelRecording}
@@ -285,6 +352,7 @@ export function SampleUpload({ profileId, open, onOpenChange }: SampleUploadProp
                       onPlayPause={handlePlayPause}
                       isPlaying={isPlaying}
                       isTranscribing={transcribe.isPending}
+                      maxDurationSeconds={captureMaxDurationSeconds}
                     />
                   )}
                 />
@@ -300,6 +368,15 @@ export function SampleUpload({ profileId, open, onOpenChange }: SampleUploadProp
                         file={selectedFile}
                         isRecording={isSystemRecording}
                         duration={systemDuration}
+                        lifecycleState={systemLifecycleState}
+                        lifecycleStatus={systemLifecycleStatus}
+                        permissionState={systemPermissionState}
+                        inputDevices={systemInputDevices}
+                        selectedInputDeviceId={selectedInputDeviceId}
+                        disconnectedDeviceId={disconnectedDeviceId}
+                        onSelectInputDevice={setSelectedInputDeviceId}
+                        onRefreshInputDevices={refreshInputDevices}
+                        isLoadingInputDevices={isLoadingInputDevices}
                         onStart={startSystemRecording}
                         onStop={stopSystemRecording}
                         onCancel={handleCancelRecording}
@@ -307,12 +384,26 @@ export function SampleUpload({ profileId, open, onOpenChange }: SampleUploadProp
                         onPlayPause={handlePlayPause}
                         isPlaying={isPlaying}
                         isTranscribing={transcribe.isPending}
+                        maxDurationSeconds={captureMaxDurationSeconds}
                       />
                     )}
                   />
                 </TabsContent>
               )}
             </Tabs>
+
+            {(transcribe.isPending || activeProcessingTask) && (
+              <div className="rounded-md border p-3 space-y-2">
+                <p className="text-sm font-medium">
+                  {RECORDING_PROCESSING_STAGE_LABELS[activeProcessingTask?.stage ?? 'transcribe']}
+                </p>
+                <Progress value={activeProcessingTask?.progress ?? undefined} className="h-2" />
+                <p className="text-xs text-muted-foreground">
+                  {activeProcessingTask?.message ||
+                    (transcribe.isPending ? 'Processing in progress...' : 'Awaiting completion...')}
+                </p>
+              </div>
+            )}
 
             <FormField
               control={form.control}

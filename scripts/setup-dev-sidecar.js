@@ -5,8 +5,9 @@
  * In dev mode, Tauri requires the sidecar binary files to exist at compile time,
  * even though developers typically run the Python server manually.
  *
- * This script creates minimal placeholder binaries that allow Tauri to compile.
- * The actual server should be started separately with `bun run dev:server`.
+ * This script creates development sidecar binaries.
+ * On Unix-like systems, the sidecar script boots the Python backend automatically.
+ * On Windows, we still use a minimal placeholder binary.
  */
 
 import { existsSync, mkdirSync, writeFileSync, statSync } from 'fs';
@@ -126,9 +127,52 @@ function createPlaceholderBinary(targetTriple) {
     minimalPE.copy(paddedPE);
     writeFileSync(binaryPath, paddedPE);
   } else {
-    // Create a minimal shell script for Unix-like systems
+    // Create a Unix sidecar launcher that starts the Python backend in dev mode.
+    // It runs from the repository root so `python -m backend.main` resolves cleanly.
     const script = `#!/bin/sh
-echo "[voicebox-server] Dev mode placeholder - start the real server with: bun run dev:server"
+set -eu
+
+SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
+
+find_root_from() {
+  START="$1"
+  DIR="$START"
+  while [ "$DIR" != "/" ]; do
+    if [ -f "$DIR/backend/main.py" ]; then
+      echo "$DIR"
+      return 0
+    fi
+    DIR="$(dirname "$DIR")"
+  done
+  return 1
+}
+
+PROJECT_ROOT=""
+for CANDIDATE in "$PWD" "$SCRIPT_DIR" "$(dirname "$SCRIPT_DIR")"; do
+  if ROOT="$(find_root_from "$CANDIDATE" 2>/dev/null)"; then
+    PROJECT_ROOT="$ROOT"
+    break
+  fi
+done
+
+if [ -z "$PROJECT_ROOT" ]; then
+  echo "[voicebox-server] Could not locate project root from PWD=$PWD or SCRIPT_DIR=$SCRIPT_DIR" >&2
+  exit 1
+fi
+
+cd "$PROJECT_ROOT"
+echo "[voicebox-server] Using project root: $PROJECT_ROOT" >&2
+
+if [ -x "$PROJECT_ROOT/backend/.venv/bin/python" ]; then
+  exec "$PROJECT_ROOT/backend/.venv/bin/python" -m backend.main "$@"
+fi
+
+if command -v uv >/dev/null 2>&1; then
+  echo "[voicebox-server] backend/.venv missing. Run: bun run setup:python" >&2
+  exit 1
+fi
+
+echo "[voicebox-server] uv is required and backend/.venv is missing. Run: bun run setup:python" >&2
 exit 1
 `;
     writeFileSync(binaryPath, script, { mode: 0o755 });
@@ -148,8 +192,12 @@ function main() {
 
   console.log('');
   console.log('Sidecar setup complete.');
-  console.log('For development, start the Python server in a separate terminal:');
-  console.log('  bun run dev:server');
+  console.log('Dev sidecar setup complete.');
+  if (process.platform !== 'win32') {
+    console.log('Unix dev mode now auto-starts the backend via sidecar.');
+  } else {
+    console.log('Windows dev mode still requires manual backend start: bun run dev:server');
+  }
   console.log('');
 }
 

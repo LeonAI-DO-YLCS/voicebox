@@ -128,6 +128,9 @@ Create multi-voice narratives, podcasts, and conversations with a timeline-based
 - **System audio capture** — record desktop audio on macOS and Windows
 - **Automatic transcription** powered by Whisper
 - **Export recordings** in multiple formats
+- **Lifecycle-driven UX** — `idle` → `armed` → `recording` → `processing` → `ready/error`
+- **Stage progress tracking** — `upload` → `validate` → `transcribe` → `embed` → `save`
+- **Persistent task surface** — active model/recording tasks remain visible across navigation and refresh
 
 ### Generation History
 
@@ -148,19 +151,25 @@ Create multi-voice narratives, podcasts, and conversations with a timeline-based
 Voicebox exposes a full REST API, so you can integrate voice synthesis into your own apps.
 
 ```bash
+# Default backend URL (auto-fallbacks to the next free port if busy)
+BASE_URL="http://127.0.0.1:17493"
+
 # Generate speech
-curl -X POST http://localhost:8000/generate \
+curl -X POST "$BASE_URL/generate" \
   -H "Content-Type: application/json" \
   -d '{"text": "Hello world", "profile_id": "abc123", "language": "en"}'
 
 # List voice profiles
-curl http://localhost:8000/profiles
+curl "$BASE_URL/profiles"
 
 # Create a profile
-curl -X POST http://localhost:8000/profiles \
+curl -X POST "$BASE_URL/profiles" \
   -H "Content-Type: application/json" \
   -d '{"name": "My Voice", "language": "en"}'
 ```
+
+If `17493` is already taken, Voicebox will pick the next free port (`17494`, `17495`, ...).  
+When that happens, use the URL printed in your terminal logs.
 
 **Use cases:**
 
@@ -170,7 +179,7 @@ curl -X POST http://localhost:8000/profiles \
 - Voice assistants
 - Content creation automation
 
-Full API documentation available at `http://localhost:8000/docs` when running.
+Full API documentation is available at `$BASE_URL/docs` when running.
 
 ---
 
@@ -225,46 +234,106 @@ Voicebox aims to be the **one-stop shop for everything voice** — cloning, synt
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for detailed setup and contribution guidelines.
 
-**Using the Makefile (recommended):** Run `make help` to see all available commands for setup, development, building, and testing.
+### Prerequisites
 
-### Quick Start
+- [Bun](https://bun.sh) (JavaScript runtime/package manager)
+- [Rust](https://rustup.rs) (for Tauri desktop shell)
+- [Python 3.11+](https://python.org) (backend server)
+- [uv](https://docs.astral.sh/uv/) (mandatory Python environment/package manager)
+- macOS only: [Xcode Command Line Tools](https://developer.apple.com/xcode/)
 
-**With Makefile (Unix/macOS/Linux):**
+### Launch Guide (Step by Step)
+
+This is the fastest path for first-time contributors.
+
+1. Clone and enter the project
 
 ```bash
-# Clone the repo
 git clone https://github.com/jamiepine/voicebox.git
 cd voicebox
-
-# Setup everything
-make setup
-
-# Start development
-make dev
 ```
 
-**Manual setup (all platforms):**
+2. Install JavaScript dependencies
 
 ```bash
-# Clone the repo
-git clone https://github.com/jamiepine/voicebox.git
-cd voicebox
-
-# Install dependencies
 bun install
+```
 
-# Install Python dependencies
-cd backend && pip install -r requirements.txt && cd ..
+3. Set up backend Python environment (uv, mandatory)
 
-# Start development
+```bash
+bun run setup:python
+```
+
+To force a clean rebuild of the Python environment:
+
+```bash
+UV_VENV_CLEAR=1 bun run setup:python
+```
+
+4. Launch desktop development mode
+
+```bash
 bun run dev
 ```
 
-**Prerequisites:** [Bun](https://bun.sh), [Rust](https://rustup.rs), [Python 3.11+](https://python.org). [XCode on macOS](https://developer.apple.com/xcode/).
+What `bun run dev` does now:
+- Validates `backend/.venv` (uv-managed) and runs `bun run setup:python` if needed
+- Picks a free frontend port (starts at `5173`, moves up if needed)
+- Picks a free backend port (starts at `17493`, moves up if needed)
+- Starts Vite, Tauri, and the local Python backend together
 
-**Performance:** 
-- **Apple Silicon (M1/M2/M3)**: Uses MLX backend with native Metal acceleration for 4-5x faster inference
-- **Windows/Linux/Intel Mac**: Uses PyTorch backend (CUDA GPU recommended, CPU supported but slower)
+5. Confirm everything is running
+
+- Tauri window opens
+- Terminal shows lines like:
+  - `[dev] Frontend port: 5173` (or fallback port)
+  - `[dev] Backend port: 17493` (or fallback port)
+  - `Uvicorn running on http://127.0.0.1:<port>`
+
+### Start Backend Only (No Desktop UI)
+
+```bash
+bun run dev:server
+```
+
+This command also auto-selects a free backend port and prints the final URL.  
+If `backend/.venv` is missing, run `bun run setup:python` first.
+
+### Optional: Web Mode
+
+```bash
+bun run dev:web
+```
+
+### Port Overrides (Optional)
+
+If you need fixed ports, set environment variables before launch:
+
+```bash
+TAURI_DEV_FRONTEND_PORT=5173 VOICEBOX_SERVER_PORT=17493 bun run dev
+```
+
+Backend-only overrides:
+
+```bash
+VOICEBOX_SERVER_PORT=17493 VOICEBOX_SERVER_HOST=127.0.0.1 bun run dev:server
+```
+
+### Quick Troubleshooting
+
+- `Port already in use`: no action needed in most cases, Voicebox now auto-fallbacks.
+- `Python module errors`: run `bun run setup:python` to rebuild `backend/.venv`.
+- `Tauri build issues`: run `cd tauri/src-tauri && cargo check` and install missing Rust toolchain deps.
+- `Backend not reachable`: check the printed backend URL and open `<url>/docs` in your browser.
+- `Microphone access denied`: enable desktop microphone privacy access and restart Voicebox.
+- `No input devices on WSL2`: verify `PULSE_SERVER`, `pactl info`, and install `libasound2-plugins`.
+- `Task/progress appears stuck`: check the Background Tasks panel and confirm `/tasks/active` returns updates.
+
+### Performance Notes
+
+- **Apple Silicon (M1/M2/M3):** MLX backend with Metal acceleration (fastest local inference)
+- **Windows/Linux/Intel Mac:** PyTorch backend (CUDA recommended, CPU supported)
 
 ### Project Structure
 

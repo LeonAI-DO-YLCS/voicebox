@@ -13,6 +13,8 @@ interface AudioSampleUploadProps {
   isTranscribing?: boolean;
   isDisabled?: boolean;
   fieldName: string;
+  recommendedDurationSeconds?: number;
+  maxDurationSeconds?: number;
 }
 
 export function AudioSampleUpload({
@@ -25,6 +27,8 @@ export function AudioSampleUpload({
   isTranscribing = false,
   isDisabled = false,
   fieldName,
+  recommendedDurationSeconds = 15,
+  maxDurationSeconds = 30,
 }: AudioSampleUploadProps) {
   const [isDragging, setIsDragging] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -93,7 +97,8 @@ export function AudioSampleUpload({
                   Choose File
                 </Button>
                 <p className="text-sm text-muted-foreground text-center">
-                  Click to choose a file or drag and drop. Maximum duration: 30 seconds.
+                  Click to choose a file or drag and drop. Recommended: {recommendedDurationSeconds}
+                  s, maximum: {maxDurationSeconds}s.
                 </p>
               </>
             ) : (

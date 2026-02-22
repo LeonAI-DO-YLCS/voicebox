@@ -20,6 +20,7 @@ import {
   FormMessage,
 } from '@/components/ui/form';
 import { Input } from '@/components/ui/input';
+import { Progress } from '@/components/ui/progress';
 import {
   Select,
   SelectContent,
@@ -31,6 +32,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Textarea } from '@/components/ui/textarea';
 import { useToast } from '@/components/ui/use-toast';
 import { LANGUAGE_CODES, LANGUAGE_OPTIONS, type LanguageCode } from '@/lib/constants/languages';
+import { getErrorDisplayDetails } from '@/lib/errors';
 import { useAudioPlayer } from '@/lib/hooks/useAudioPlayer';
 import { useAudioRecording } from '@/lib/hooks/useAudioRecording';
 import {
@@ -40,9 +42,12 @@ import {
   useProfile,
   useUpdateProfile,
   useUploadAvatar,
+  useVoiceCloneReferencePolicy,
 } from '@/lib/hooks/useProfiles';
+import { useRecordingProcessingProgress } from '@/lib/hooks/useRecordingProcessingProgress';
 import { useSystemAudioCapture } from '@/lib/hooks/useSystemAudioCapture';
 import { useTranscription } from '@/lib/hooks/useTranscription';
+import { RECORDING_PROCESSING_STAGE_LABELS } from '@/lib/recording/processing';
 import { convertToWav, formatAudioDuration, getAudioDuration } from '@/lib/utils/audio';
 import { usePlatform } from '@/platform/PlatformContext';
 import { useServerStore } from '@/stores/serverStore';
@@ -52,7 +57,12 @@ import { AudioSampleSystem } from './AudioSampleSystem';
 import { AudioSampleUpload } from './AudioSampleUpload';
 import { SampleList } from './SampleList';
 
-const MAX_AUDIO_DURATION_SECONDS = 30;
+const FALLBACK_VOICE_CLONE_POLICY = {
+  hard_min_seconds: 2,
+  recommended_target_seconds: 15,
+  hard_max_seconds: 30,
+  capture_auto_stop_seconds: 29,
+};
 
 const baseProfileSchema = z.object({
   name: z.string().min(1, 'Name is required').max(100),
@@ -118,13 +128,22 @@ export function ProfileForm() {
   const transcribe = useTranscription();
   const { toast } = useToast();
   const [sampleMode, setSampleMode] = useState<'upload' | 'record' | 'system'>('record');
+  const [activeTranscriptionTaskId, setActiveTranscriptionTaskId] = useState<string | null>(null);
   const [audioDuration, setAudioDuration] = useState<number | null>(null);
   const [isValidatingAudio, setIsValidatingAudio] = useState(false);
   const [avatarPreview, setAvatarPreview] = useState<string | null>(null);
   const avatarInputRef = useRef<HTMLInputElement>(null);
-  const { isPlaying, playPause, cleanup: cleanupAudio } = useAudioPlayer();
+  const { isPlaying, playbackProgress, playPause, cleanup: cleanupAudio } = useAudioPlayer();
   const isCreating = !editingProfileId;
   const serverUrl = useServerStore((state) => state.serverUrl);
+  const { data: voiceClonePolicy } = useVoiceCloneReferencePolicy();
+  const effectivePolicy = voiceClonePolicy ?? FALLBACK_VOICE_CLONE_POLICY;
+  const maxAudioDurationSeconds = effectivePolicy.hard_max_seconds;
+  const recommendedAudioDurationSeconds = effectivePolicy.recommended_target_seconds;
+  const captureMaxDurationSeconds = Math.max(
+    1,
+    Math.min(effectivePolicy.capture_auto_stop_seconds, Math.floor(maxAudioDurationSeconds)),
+  );
 
   const form = useForm<ProfileFormValues>({
     resolver: zodResolver(profileSchema),
@@ -140,6 +159,7 @@ export function ProfileForm() {
 
   const selectedFile = form.watch('sampleFile');
   const selectedAvatarFile = form.watch('avatarFile');
+  const { task: activeProcessingTask } = useRecordingProcessingProgress(activeTranscriptionTaskId);
 
   // Validate audio duration when file is selected
   useEffect(() => {
@@ -148,10 +168,15 @@ export function ProfileForm() {
       getAudioDuration(selectedFile as File & { recordedDuration?: number })
         .then((duration) => {
           setAudioDuration(duration);
-          if (duration > MAX_AUDIO_DURATION_SECONDS) {
+          if (duration < effectivePolicy.hard_min_seconds) {
             form.setError('sampleFile', {
               type: 'manual',
-              message: `Audio is too long (${formatAudioDuration(duration)}). Maximum duration is ${formatAudioDuration(MAX_AUDIO_DURATION_SECONDS)}.`,
+              message: `Audio is too short (${formatAudioDuration(duration)}). Minimum duration is ${formatAudioDuration(effectivePolicy.hard_min_seconds)}.`,
+            });
+          } else if (duration > maxAudioDurationSeconds) {
+            form.setError('sampleFile', {
+              type: 'manual',
+              message: `Audio is too long (${formatAudioDuration(duration)}). Maximum duration is ${formatAudioDuration(maxAudioDurationSeconds)}.`,
             });
           } else {
             form.clearErrors('sampleFile');
@@ -181,17 +206,22 @@ export function ProfileForm() {
       setAudioDuration(null);
       form.clearErrors('sampleFile');
     }
-  }, [selectedFile, form]);
+  }, [selectedFile, form, maxAudioDurationSeconds, effectivePolicy.hard_min_seconds]);
 
   const {
     isRecording,
     duration,
     error: recordingError,
+    lifecycleState: recordingLifecycleState,
+    lifecycleStatus: recordingLifecycleStatus,
+    liveInputLevel,
+    waveformSamples,
+    waveformMode,
     startRecording,
     stopRecording,
     cancelRecording,
   } = useAudioRecording({
-    maxDurationSeconds: 29,
+    maxDurationSeconds: captureMaxDurationSeconds,
     onRecordingComplete: (blob, recordedDuration) => {
       const file = new File([blob], `recording-${Date.now()}.webm`, {
         type: blob.type || 'audio/webm',
@@ -213,11 +243,20 @@ export function ProfileForm() {
     duration: systemDuration,
     error: systemRecordingError,
     isSupported: isSystemAudioSupported,
+    permissionState: systemPermissionState,
+    lifecycleState: systemLifecycleState,
+    lifecycleStatus: systemLifecycleStatus,
+    inputDevices: systemInputDevices,
+    selectedInputDeviceId,
+    disconnectedDeviceId,
+    setSelectedInputDeviceId,
+    isLoadingInputDevices,
+    refreshInputDevices,
     startRecording: startSystemRecording,
     stopRecording: stopSystemRecording,
     cancelRecording: cancelSystemRecording,
   } = useSystemAudioCapture({
-    maxDurationSeconds: 29,
+    maxDurationSeconds: captureMaxDurationSeconds,
     onRecordingComplete: (blob, recordedDuration) => {
       const file = new File([blob], `system-audio-${Date.now()}.wav`, {
         type: blob.type || 'audio/wav',
@@ -331,16 +370,27 @@ export function ProfileForm() {
     }
 
     try {
+      const taskId =
+        typeof crypto !== 'undefined' && 'randomUUID' in crypto
+          ? crypto.randomUUID()
+          : `recording-${Date.now()}`;
+      setActiveTranscriptionTaskId(taskId);
       const language = form.getValues('language');
-      const result = await transcribe.mutateAsync({ file, language });
+      const result = await transcribe.mutateAsync({ file, language, taskId });
+      setActiveTranscriptionTaskId(result.task_id ?? taskId);
 
       form.setValue('referenceText', result.text, { shouldValidate: true });
     } catch (error) {
+      const details = getErrorDisplayDetails(error, 'Transcription failed');
       toast({
-        title: 'Transcription failed',
-        description: error instanceof Error ? error.message : 'Failed to transcribe audio',
+        title: details.title,
+        description: `${details.summary}${details.hint ? ` ${details.hint}` : ''}`,
         variant: 'destructive',
       });
+    } finally {
+      window.setTimeout(() => {
+        setActiveTranscriptionTaskId(null);
+      }, 1500);
     }
   }
 
@@ -473,14 +523,26 @@ export function ProfileForm() {
         // Validate audio duration before creating profile
         try {
           const duration = await getAudioDuration(sampleFile);
-          if (duration > MAX_AUDIO_DURATION_SECONDS) {
+          if (duration < effectivePolicy.hard_min_seconds) {
             form.setError('sampleFile', {
               type: 'manual',
-              message: `Audio is too long (${formatAudioDuration(duration)}). Maximum duration is ${formatAudioDuration(MAX_AUDIO_DURATION_SECONDS)}.`,
+              message: `Audio is too short (${formatAudioDuration(duration)}). Minimum duration is ${formatAudioDuration(effectivePolicy.hard_min_seconds)}.`,
             });
             toast({
               title: 'Invalid audio file',
-              description: `Audio duration is ${formatAudioDuration(duration)}, but maximum is ${formatAudioDuration(MAX_AUDIO_DURATION_SECONDS)}.`,
+              description: `Audio duration is ${formatAudioDuration(duration)}, but minimum is ${formatAudioDuration(effectivePolicy.hard_min_seconds)}.`,
+              variant: 'destructive',
+            });
+            return; // Prevent form submission
+          }
+          if (duration > maxAudioDurationSeconds) {
+            form.setError('sampleFile', {
+              type: 'manual',
+              message: `Audio is too long (${formatAudioDuration(duration)}). Maximum duration is ${formatAudioDuration(maxAudioDurationSeconds)}.`,
+            });
+            toast({
+              title: 'Invalid audio file',
+              description: `Audio duration is ${formatAudioDuration(duration)}, but maximum is ${formatAudioDuration(maxAudioDurationSeconds)}.`,
               variant: 'destructive',
             });
             return; // Prevent form submission
@@ -710,10 +772,11 @@ export function ProfileForm() {
                                 isValidating={isValidatingAudio}
                                 isTranscribing={transcribe.isPending}
                                 isDisabled={
-                                  audioDuration !== null &&
-                                  audioDuration > MAX_AUDIO_DURATION_SECONDS
+                                  audioDuration !== null && audioDuration > maxAudioDurationSeconds
                                 }
                                 fieldName={name}
+                                recommendedDurationSeconds={recommendedAudioDurationSeconds}
+                                maxDurationSeconds={maxAudioDurationSeconds}
                               />
                             )}
                           />
@@ -728,6 +791,13 @@ export function ProfileForm() {
                                 file={selectedFile}
                                 isRecording={isRecording}
                                 duration={duration}
+                                lifecycleState={recordingLifecycleState}
+                                lifecycleStatus={recordingLifecycleStatus}
+                                liveInputLevel={liveInputLevel}
+                                waveformSamples={waveformSamples}
+                                waveformMode={waveformMode}
+                                playbackProgress={playbackProgress}
+                                activeProcessingTask={activeProcessingTask}
                                 onStart={startRecording}
                                 onStop={stopRecording}
                                 onCancel={handleCancelRecording}
@@ -735,6 +805,7 @@ export function ProfileForm() {
                                 onPlayPause={handlePlayPause}
                                 isPlaying={isPlaying}
                                 isTranscribing={transcribe.isPending}
+                                maxDurationSeconds={captureMaxDurationSeconds}
                               />
                             )}
                           />
@@ -750,6 +821,15 @@ export function ProfileForm() {
                                   file={selectedFile}
                                   isRecording={isSystemRecording}
                                   duration={systemDuration}
+                                  lifecycleState={systemLifecycleState}
+                                  lifecycleStatus={systemLifecycleStatus}
+                                  permissionState={systemPermissionState}
+                                  inputDevices={systemInputDevices}
+                                  selectedInputDeviceId={selectedInputDeviceId}
+                                  disconnectedDeviceId={disconnectedDeviceId}
+                                  onSelectInputDevice={setSelectedInputDeviceId}
+                                  onRefreshInputDevices={refreshInputDevices}
+                                  isLoadingInputDevices={isLoadingInputDevices}
                                   onStart={startSystemRecording}
                                   onStop={stopSystemRecording}
                                   onCancel={handleCancelRecording}
@@ -757,12 +837,35 @@ export function ProfileForm() {
                                   onPlayPause={handlePlayPause}
                                   isPlaying={isPlaying}
                                   isTranscribing={transcribe.isPending}
+                                  maxDurationSeconds={captureMaxDurationSeconds}
                                 />
                               )}
                             />
                           </TabsContent>
                         )}
                       </Tabs>
+
+                      {(transcribe.isPending || activeProcessingTask) && (
+                        <div className="rounded-md border p-3 space-y-2">
+                          <p className="text-sm font-medium">
+                            {
+                              RECORDING_PROCESSING_STAGE_LABELS[
+                                activeProcessingTask?.stage ?? 'transcribe'
+                              ]
+                            }
+                          </p>
+                          <Progress
+                            value={activeProcessingTask?.progress ?? undefined}
+                            className="h-2"
+                          />
+                          <p className="text-xs text-muted-foreground">
+                            {activeProcessingTask?.message ||
+                              (transcribe.isPending
+                                ? 'Processing in progress...'
+                                : 'Awaiting completion...')}
+                          </p>
+                        </div>
+                      )}
 
                       <FormField
                         control={form.control}

@@ -23,6 +23,11 @@ Thank you for your interest in contributing to Voicebox! This document provides 
   python --version  # Should be 3.11 or higher
   ```
 
+- **[uv](https://docs.astral.sh/uv/)** - Mandatory Python environment/package manager
+  ```bash
+  uv --version
+  ```
+
 - **[Rust](https://rustup.rs)** - For Tauri desktop app (installed automatically by Tauri CLI)
   ```bash
   rustc --version  # Check if installed
@@ -51,57 +56,25 @@ Thank you for your interest in contributing to Voicebox! This document provides 
    - `tauri/` - Tauri desktop wrapper
    - `web/` - Web deployment wrapper
 
-3. **Set up Python backend**
+3. **Set up Python backend (uv-managed)**
    ```bash
-   cd backend
-   
-   # Create virtual environment
-   python -m venv venv
-   
-   # Activate virtual environment
-   source venv/bin/activate  # On macOS/Linux
-   # or
-   venv\Scripts\activate  # On Windows
-   
-   # Install Python dependencies
-   pip install -r requirements.txt
-   
-   # Install MLX dependencies (Apple Silicon only - for faster inference)
-   # On Apple Silicon, this enables native Metal acceleration
-   if [[ $(uname -m) == "arm64" ]]; then
-     pip install -r requirements-mlx.txt
-   fi
-   
-   # Install Qwen3-TTS (required for voice synthesis)
-   pip install git+https://github.com/QwenLM/Qwen3-TTS.git
+   bun run setup:python
    ```
+   This creates `backend/.venv` using `uv` and installs all required backend dependencies.
 
 4. **Start development servers**
 
-   Development requires two terminals: one for the Python backend, one for the Tauri app.
-
-   **Terminal 1: Backend server** (start this first)
-   ```bash
-   cd backend
-   source venv/bin/activate  # Activate venv if not already active
-   bun run dev:server
-   # Or manually: uvicorn main:app --reload --port 17493
-   ```
-   Backend will be available at `http://localhost:17493`
-
-   **Terminal 2: Desktop app**
+   **Desktop app + backend together (recommended)**
    ```bash
    bun run dev
    ```
-   This will:
-   - Create a placeholder sidecar binary (for Tauri compilation)
-   - Start Vite dev server on port 5173
-   - Launch Tauri window pointing to localhost:5173
-   - Connect to the Python server you started in Terminal 1
-   - Enable hot reload
+   This starts Tauri, Vite, and backend together with automatic port fallback.
 
-   > **Note:** In dev mode, the app connects to your manually-started Python server.
-   > The bundled server binary is only used in production builds.
+   **Backend only (optional)**
+   ```bash
+   bun run dev:server
+   ```
+   Backend URL defaults to `http://127.0.0.1:17493` and automatically moves to the next free port if needed.
 
    **Optional: Web app**
    ```bash
@@ -405,9 +378,9 @@ See [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md) for common issues and sol
 
 **Quick fixes:**
 
-- **Backend won't start:** Check Python version (3.11+), ensure venv is activated, install dependencies
+- **Backend won't start:** Ensure `uv` is installed and run `bun run setup:python`
 - **Tauri build fails:** Ensure Rust is installed, clean build with `cd tauri/src-tauri && cargo clean`
-- **OpenAPI client generation fails:** Ensure backend is running, check `curl http://localhost:8000/openapi.json`
+- **OpenAPI client generation fails:** Ensure backend is running, check `curl http://127.0.0.1:17493/openapi.json`
 
 ## Questions?
 
