@@ -3,47 +3,51 @@
 
 set -e
 
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+cd "$PROJECT_ROOT"
+
 echo "Generating OpenAPI client..."
 
-# Check if backend is running
-if ! curl -s http://localhost:8000/openapi.json > /dev/null 2>&1; then
-    echo "Backend not running. Starting backend..."
-    cd backend
-    
-    # Check if virtual environment exists
-    if [ ! -d "venv" ]; then
-        echo "Creating virtual environment..."
-        python -m venv venv
-    fi
-    
-    source venv/bin/activate 2>/dev/null || source venv/Scripts/activate 2>/dev/null
-    
-    # Install dependencies if needed
-    if ! python -c "import fastapi" 2>/dev/null; then
-        echo "Installing backend dependencies..."
-        pip install -r requirements.txt
-    fi
-    
-    # Start backend in background
-    echo "Starting backend server..."
-    uvicorn main:app --port 8000 &
+API_URL="${VOICEBOX_API_URL:-http://127.0.0.1:17493}"
+OPENAPI_URL="${API_URL%/}/openapi.json"
+VENV_PYTHON="backend/.venv/bin/python"
+
+if [ ! -x "$VENV_PYTHON" ]; then
+    echo "Error: backend/.venv not found. Run: bun run setup:python"
+    exit 1
+fi
+
+if ! command -v uv >/dev/null 2>&1; then
+    echo "Error: uv is required. Install from https://docs.astral.sh/uv/getting-started/installation/"
+    exit 1
+fi
+
+# Check if backend is already running
+if ! curl -sf "$OPENAPI_URL" > /dev/null 2>&1; then
+    echo "Backend not running at $API_URL. Starting temporary backend on 127.0.0.1:18000..."
+    cd "$PROJECT_ROOT/backend"
+
+    uv run --python "$PWD/.venv/bin/python" -m uvicorn main:app --port 18000 &
     BACKEND_PID=$!
-    
-    # Wait for server to be ready
+
+    API_URL="http://127.0.0.1:18000"
+    OPENAPI_URL="${API_URL}/openapi.json"
+
     echo "Waiting for server to start..."
     for i in {1..30}; do
-        if curl -s http://localhost:8000/openapi.json > /dev/null 2>&1; then
+        if curl -sf "$OPENAPI_URL" > /dev/null 2>&1; then
             break
         fi
         sleep 1
     done
-    
-    if ! curl -s http://localhost:8000/openapi.json > /dev/null 2>&1; then
+
+    if ! curl -sf "$OPENAPI_URL" > /dev/null 2>&1; then
         echo "Error: Backend failed to start"
         kill $BACKEND_PID 2>/dev/null || true
         exit 1
     fi
-    
+
     echo "Backend started (PID: $BACKEND_PID)"
     STARTED_BACKEND=true
 else
@@ -52,7 +56,8 @@ fi
 
 # Download OpenAPI schema
 echo "Downloading OpenAPI schema..."
-curl -s http://localhost:8000/openapi.json > app/openapi.json
+cd "$PROJECT_ROOT"
+curl -sf "$OPENAPI_URL" > app/openapi.json
 
 # Check if openapi-typescript-codegen is installed
 if ! bunx --bun openapi-typescript-codegen --version > /dev/null 2>&1; then

@@ -3,6 +3,9 @@ import react from '@vitejs/plugin-react';
 import tailwindcss from '@tailwindcss/vite';
 import { defineConfig } from 'vite';
 
+const parsedPort = Number.parseInt(process.env.TAURI_DEV_FRONTEND_PORT ?? '5173', 10);
+const devPort = Number.isNaN(parsedPort) || parsedPort <= 0 ? 5173 : parsedPort;
+
 export default defineConfig({
   plugins: [react(), tailwindcss()],
   resolve: {
@@ -22,7 +25,8 @@ export default defineConfig({
   root: path.resolve(__dirname),
   clearScreen: false,
   server: {
-    port: 5173,
+    host: 'localhost',
+    port: devPort,
     strictPort: true,
     // Watch files in the app directory for changes
     watch: {

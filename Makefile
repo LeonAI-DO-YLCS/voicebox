@@ -10,11 +10,11 @@ TAURI_DIR := tauri
 WEB_DIR := web
 APP_DIR := app
 
-# Python (prefer 3.12, fallback to 3.13, then python3)
-PYTHON := $(shell command -v python3.12 2>/dev/null || command -v python3.13 2>/dev/null || echo python3)
-VENV := $(CURDIR)/$(BACKEND_DIR)/venv
+# Python (prefer 3.12, fallback to 3.11, then python3)
+PYTHON := $(shell command -v python3.12 2>/dev/null || command -v python3.11 2>/dev/null || echo python3)
+UV := $(shell command -v uv 2>/dev/null || echo uv)
+VENV := $(CURDIR)/$(BACKEND_DIR)/.venv
 VENV_BIN := $(VENV)/bin
-PIP := $(VENV_BIN)/pip
 PYTHON_VENV := $(VENV_BIN)/python
 
 # Colors for output
@@ -44,26 +44,26 @@ setup-js: ## Install JavaScript dependencies (bun)
 	@echo -e "$(BLUE)Installing JavaScript dependencies...$(NC)"
 	bun install
 
-setup-python: $(VENV)/bin/activate ## Set up Python virtual environment and dependencies
+setup-python: ## Set up Python virtual environment and dependencies with uv
 	@echo -e "$(BLUE)Installing Python dependencies...$(NC)"
-	$(PIP) install --upgrade pip
-	$(PIP) install -r $(BACKEND_DIR)/requirements.txt
+	@command -v $(UV) >/dev/null 2>&1 || (echo -e "$(YELLOW)uv is required. Install from https://docs.astral.sh/uv/getting-started/installation/$(NC)" && exit 1)
+	@if [ "$${UV_VENV_CLEAR:-0}" = "1" ]; then \
+		echo -e "$(BLUE)Recreating $(VENV) with uv --clear...$(NC)"; \
+		$(UV) venv --clear --python $(PYTHON) $(VENV); \
+	elif [ -x "$(PYTHON_VENV)" ]; then \
+		echo -e "$(BLUE)Reusing existing $(VENV)$(NC)"; \
+	else \
+		echo -e "$(BLUE)Creating $(VENV) with uv...$(NC)"; \
+		$(UV) venv --python $(PYTHON) $(VENV); \
+	fi
+	$(UV) pip install --python $(PYTHON_VENV) -r $(BACKEND_DIR)/requirements.txt
 	@if [ "$$(uname -m)" = "arm64" ] && [ "$$(uname)" = "Darwin" ]; then \
 		echo -e "$(BLUE)Detected Apple Silicon - installing MLX dependencies...$(NC)"; \
-		$(PIP) install -r $(BACKEND_DIR)/requirements-mlx.txt; \
+		$(UV) pip install --python $(PYTHON_VENV) -r $(BACKEND_DIR)/requirements-mlx.txt; \
 		echo -e "$(GREEN)✓ MLX backend enabled (native Metal acceleration)$(NC)"; \
 	fi
-	$(PIP) install git+https://github.com/QwenLM/Qwen3-TTS.git
+	$(UV) pip install --python $(PYTHON_VENV) git+https://github.com/QwenLM/Qwen3-TTS.git
 	@echo -e "$(GREEN)✓ Python environment ready$(NC)"
-
-$(VENV)/bin/activate:
-	@echo -e "$(BLUE)Creating Python virtual environment...$(NC)"
-	@PY_MINOR=$$($(PYTHON) -c "import sys; print(sys.version_info[1])"); \
-	if [ "$$PY_MINOR" -gt 13 ]; then \
-		echo -e "$(YELLOW)Warning: Python 3.$$PY_MINOR detected. ML packages may not be compatible.$(NC)"; \
-		echo -e "$(YELLOW)Recommended: Use Python 3.12 or 3.13 (brew install python@3.12)$(NC)"; \
-	fi
-	$(PYTHON) -m venv $(VENV)
 
 setup-rust: ## Install Rust toolchain (if not present)
 	@command -v rustc >/dev/null 2>&1 || curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
@@ -83,8 +83,8 @@ dev: ## Start backend + desktop app (parallel)
 		wait
 
 dev-backend: ## Start FastAPI backend server
-	@echo -e "$(BLUE)Starting backend server on http://localhost:17493$(NC)"
-	$(VENV_BIN)/uvicorn backend.main:app --reload --port 17493
+	@echo -e "$(BLUE)Starting backend server (auto port fallback)$(NC)"
+	bun run dev:server
 
 dev-frontend: ## Start Tauri desktop app
 	@echo -e "$(BLUE)Starting Tauri desktop app...$(NC)"
@@ -99,7 +99,8 @@ dev-web: ## Start backend + web app (parallel)
 
 kill-dev: ## Kill all development processes
 	@echo -e "$(YELLOW)Killing development processes...$(NC)"
-	-pkill -f "uvicorn main:app" 2>/dev/null || true
+	-pkill -f "uvicorn backend.main:app" 2>/dev/null || true
+	-pkill -f "backend.main --data-dir" 2>/dev/null || true
 	-pkill -f "vite" 2>/dev/null || true
 	@echo -e "$(GREEN)✓ Processes killed$(NC)"
 
@@ -131,8 +132,9 @@ build-web: ## Build web app
 
 .PHONY: db-init db-reset generate-api
 
-db-init: $(VENV)/bin/activate ## Initialize SQLite database
+db-init: ## Initialize SQLite database
 	@echo -e "$(BLUE)Initializing database...$(NC)"
+	@if [ ! -x "$(PYTHON_VENV)" ]; then echo -e "$(YELLOW)Python env missing. Run: make setup-python$(NC)"; exit 1; fi
 	cd $(BACKEND_DIR) && $(PYTHON_VENV) -c "from database import init_db; init_db()"
 	@echo -e "$(GREEN)✓ Database created at $(BACKEND_DIR)/data/voicebox.db$(NC)"
 
@@ -181,10 +183,10 @@ test: test-backend test-frontend ## Run all tests
 
 test-backend: ## Run Python backend tests (requires pytest)
 	@echo -e "$(BLUE)Running backend tests...$(NC)"
-	@if [ -f "$(VENV_BIN)/pytest" ]; then \
-		cd $(BACKEND_DIR) && $(VENV_BIN)/pytest -v; \
+	@if [ -f "$(PYTHON_VENV)" ]; then \
+		cd $(BACKEND_DIR) && $(PYTHON_VENV) -m pytest -v; \
 	else \
-		echo -e "$(YELLOW)pytest not installed. Run: $(PIP) install pytest$(NC)"; \
+		echo -e "$(YELLOW)Python env missing. Run: make setup-python$(NC)"; \
 		exit 1; \
 	fi
 
