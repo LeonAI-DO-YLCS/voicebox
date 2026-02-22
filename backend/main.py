@@ -21,9 +21,9 @@ import tempfile
 import io
 from pathlib import Path
 import uuid
-import asyncio
 import signal
 import os
+from contextlib import asynccontextmanager
 
 from . import database, models, profiles, history, tts, transcribe, config, export_import, channels, stories, __version__
 from .database import get_db, Generation as DBGeneration, VoiceProfile as DBVoiceProfile
@@ -32,10 +32,20 @@ from .utils.tasks import get_task_manager
 from .utils.cache import clear_voice_prompt_cache
 from .platform_detect import get_backend_type
 
+@asynccontextmanager
+async def lifespan(_: FastAPI):
+    await _run_startup_tasks()
+    try:
+        yield
+    finally:
+        await _run_shutdown_tasks()
+
+
 app = FastAPI(
     title="voicebox API",
     description="Production-quality Qwen3-TTS voice cloning API",
     version=__version__,
+    lifespan=lifespan,
 )
 
 # CORS middleware
@@ -2015,9 +2025,8 @@ def _get_gpu_status() -> str:
     return "None (CPU only)"
 
 
-@app.on_event("startup")
-async def startup_event():
-    """Run on application startup."""
+async def _run_startup_tasks():
+    """Run startup tasks."""
     print("voicebox API starting up...")
     database.init_db()
     print(f"Database initialized at {database._db_path}")
@@ -2044,9 +2053,8 @@ async def startup_event():
         print("Model downloads may fail. Please ensure the directory exists and has write permissions.")
 
 
-@app.on_event("shutdown")
-async def shutdown_event():
-    """Run on application shutdown."""
+async def _run_shutdown_tasks():
+    """Run shutdown tasks."""
     print("voicebox API shutting down...")
     # Unload models to free memory
     tts.unload_tts_model()

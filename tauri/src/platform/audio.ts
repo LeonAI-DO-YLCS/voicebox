@@ -1,5 +1,5 @@
 import { invoke } from '@tauri-apps/api/core';
-import type { PlatformAudio, AudioDevice } from '@/platform/types';
+import type { PlatformAudio, AudioDevice, AudioInputSignalProbe } from '@/platform/types';
 
 export const tauriAudio: PlatformAudio = {
   isSystemAudioSupported(): boolean {
@@ -28,6 +28,20 @@ export const tauriAudio: PlatformAudio = {
     }
 
     return new Blob([bytes], { type: 'audio/wav' });
+  },
+
+  async getSystemAudioCaptureLevels(): Promise<number[]> {
+    return await invoke<number[]>('get_system_audio_capture_levels');
+  },
+
+  async probeSystemAudioInputSignal(
+    inputDeviceId?: string | null,
+    durationMs?: number,
+  ): Promise<AudioInputSignalProbe> {
+    return await invoke<AudioInputSignalProbe>('probe_system_audio_input_signal', {
+      deviceId: inputDeviceId ?? null,
+      durationMs: durationMs ?? 2000,
+    });
   },
 
   async listSystemAudioInputDevices(): Promise<AudioDevice[]> {

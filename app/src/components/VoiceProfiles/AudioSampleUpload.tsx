@@ -2,6 +2,7 @@ import { Mic, Pause, Play, Upload } from 'lucide-react';
 import { useRef, useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { FormControl, FormItem, FormMessage } from '@/components/ui/form';
+import { WaveformStrip } from './WaveformFeedback';
 
 interface AudioSampleUploadProps {
   file: File | null | undefined;
@@ -15,6 +16,9 @@ interface AudioSampleUploadProps {
   fieldName: string;
   recommendedDurationSeconds?: number;
   maxDurationSeconds?: number;
+  waveformSamples?: number[];
+  playbackProgress?: number;
+  isWaveformLoading?: boolean;
 }
 
 export function AudioSampleUpload({
@@ -29,6 +33,9 @@ export function AudioSampleUpload({
   fieldName,
   recommendedDurationSeconds = 15,
   maxDurationSeconds = 30,
+  waveformSamples = [],
+  playbackProgress,
+  isWaveformLoading = false,
 }: AudioSampleUploadProps) {
   const [isDragging, setIsDragging] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -52,6 +59,7 @@ export function AudioSampleUpload({
             }}
             className="hidden"
           />
+          {/* biome-ignore lint/a11y/useSemanticElements: Drop zone container wraps nested controls and needs div semantics. */}
           <div
             role="button"
             tabIndex={0}
@@ -106,6 +114,14 @@ export function AudioSampleUpload({
                 <div className="flex items-center gap-2">
                   <Upload className="h-5 w-5 text-primary" />
                   <span className="font-medium">File uploaded</span>
+                </div>
+                <div className="w-full space-y-2">
+                  <WaveformStrip samples={waveformSamples} playheadProgress={playbackProgress} />
+                  <p className="text-xs text-muted-foreground text-center">
+                    {isWaveformLoading
+                      ? 'Generating waveform preview...'
+                      : 'Playback progress is shown on the waveform preview.'}
+                  </p>
                 </div>
                 <p className="text-sm text-muted-foreground text-center">File: {file.name}</p>
                 <div className="flex gap-2">

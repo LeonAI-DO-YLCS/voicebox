@@ -11,6 +11,9 @@ import {
 import type { NormalizedInputDevice } from '@/lib/recording/devices';
 import type { RecordingLifecycleState } from '@/lib/recording/lifecycle';
 import { formatAudioDuration } from '@/lib/utils/audio';
+import type { AudioInputSignalProbe } from '@/platform/types';
+import { AudioInputDiagnosticsPanel } from './AudioInputDiagnosticsPanel';
+import { LiveLevelMeter, WaveformStrip } from './WaveformFeedback';
 
 interface AudioSampleSystemProps {
   file: File | null | undefined;
@@ -36,6 +39,16 @@ interface AudioSampleSystemProps {
   isPlaying: boolean;
   isTranscribing?: boolean;
   maxDurationSeconds?: number;
+  liveInputLevel: number;
+  waveformSamples: number[];
+  waveformMode: 'waveform' | 'meter';
+  playbackProgress?: number;
+  previewWaveformSamples?: number[];
+  diagnosticsProbe?: AudioInputSignalProbe | null;
+  diagnosticsError?: string | null;
+  isDiagnosticsRunning?: boolean;
+  onRunDiagnostics?: () => void;
+  diagnosticsDisabled?: boolean;
 }
 
 export function AudioSampleSystem({
@@ -59,6 +72,16 @@ export function AudioSampleSystem({
   isPlaying,
   isTranscribing = false,
   maxDurationSeconds = 30,
+  liveInputLevel,
+  waveformSamples,
+  waveformMode,
+  playbackProgress,
+  previewWaveformSamples = [],
+  diagnosticsProbe = null,
+  diagnosticsError = null,
+  isDiagnosticsRunning = false,
+  onRunDiagnostics,
+  diagnosticsDisabled = false,
 }: AudioSampleSystemProps) {
   const availableDevices = inputDevices.filter((device) => device.availability === 'available');
   const hasInputDevices = availableDevices.length > 0;
@@ -151,11 +174,36 @@ export function AudioSampleSystem({
               <p className="text-sm text-muted-foreground text-center">
                 {lifecycleStatus.description} Maximum duration: {maxDurationSeconds} seconds.
               </p>
+              {onRunDiagnostics && (
+                <div className="w-full max-w-md">
+                  <AudioInputDiagnosticsPanel
+                    title="System/Mic Signal Check"
+                    description="Checks whether the selected input source receives audible signal."
+                    onRunProbe={onRunDiagnostics}
+                    isProbing={isDiagnosticsRunning}
+                    probe={diagnosticsProbe}
+                    error={diagnosticsError}
+                    disabled={diagnosticsDisabled}
+                  />
+                </div>
+              )}
             </div>
           )}
 
           {isRecording && (
-            <div className="flex flex-col items-center justify-center gap-4 p-4 border-2 border-destructive rounded-lg bg-destructive/5 min-h-[180px]">
+            <div className="flex flex-col items-center justify-center gap-4 p-4 border-2 border-destructive rounded-lg bg-destructive/5 min-h-[210px]">
+              <div className="w-full space-y-3">
+                {waveformMode === 'waveform' ? (
+                  <WaveformStrip samples={waveformSamples} />
+                ) : (
+                  <div className="space-y-2">
+                    <LiveLevelMeter level={liveInputLevel} />
+                    <p className="text-xs text-muted-foreground text-center">
+                      Live waveform unavailable in this runtime. Showing input level meter fallback.
+                    </p>
+                  </div>
+                )}
+              </div>
               <div className="flex items-center gap-4">
                 <div className="flex items-center gap-2">
                   <div className="h-3 w-3 rounded-full bg-destructive animate-pulse" />
@@ -182,10 +230,19 @@ export function AudioSampleSystem({
           )}
 
           {file && !isRecording && lifecycleState !== 'processing' && (
-            <div className="flex flex-col items-center justify-center gap-4 p-4 border-2 border-primary rounded-lg bg-primary/5 min-h-[180px]">
+            <div className="flex flex-col items-center justify-center gap-4 p-4 border-2 border-primary rounded-lg bg-primary/5 min-h-[210px]">
               <div className="flex items-center gap-2">
                 <Monitor className="h-5 w-5 text-primary" />
                 <span className="font-medium">Capture complete</span>
+              </div>
+              <div className="w-full space-y-2">
+                <WaveformStrip
+                  samples={waveformSamples.length > 0 ? waveformSamples : previewWaveformSamples}
+                  playheadProgress={playbackProgress}
+                />
+                <p className="text-xs text-muted-foreground text-center">
+                  Playback progress is shown on the waveform preview.
+                </p>
               </div>
               <p className="text-sm text-muted-foreground text-center">File: {file.name}</p>
               <div className="flex gap-2">

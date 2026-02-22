@@ -43,10 +43,26 @@ export interface AudioDevice {
   diagnostics?: string;
 }
 
+export interface AudioInputSignalProbe {
+  device_name: string;
+  duration_ms: number;
+  sample_count: number;
+  peak: number;
+  rms: number;
+  normalized_level: number;
+  has_signal: boolean;
+  message: string;
+}
+
 export interface PlatformAudio {
   isSystemAudioSupported(): boolean;
   startSystemAudioCapture(maxDurationSecs: number, inputDeviceId?: string | null): Promise<void>;
   stopSystemAudioCapture(): Promise<Blob>;
+  getSystemAudioCaptureLevels(): Promise<number[]>;
+  probeSystemAudioInputSignal(
+    inputDeviceId?: string | null,
+    durationMs?: number,
+  ): Promise<AudioInputSignalProbe>;
   listSystemAudioInputDevices(): Promise<AudioDevice[]>;
   listOutputDevices(): Promise<AudioDevice[]>;
   playToDevices(audioData: Uint8Array, deviceIds: string[]): Promise<void>;
