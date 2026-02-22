@@ -1,4 +1,4 @@
-use crate::audio_capture::AudioCaptureState;
+use crate::audio_capture::{AudioCaptureState, AudioInputDevice};
 use base64::{engine::general_purpose, Engine as _};
 use hound::{WavSpec, WavWriter};
 use screencapturekit::{
@@ -19,6 +19,7 @@ use tokio::sync::mpsc;
 pub async fn start_capture(
     state: &AudioCaptureState,
     max_duration_secs: u32,
+    _selected_device_id: Option<String>,
 ) -> Result<(), String> {
     // Reset previous samples
     state.reset();
@@ -155,6 +156,10 @@ pub fn is_supported() -> bool {
     {
         false
     }
+}
+
+pub fn list_input_devices() -> Result<Vec<AudioInputDevice>, String> {
+    Ok(Vec::new())
 }
 
 fn extract_audio_samples(sample_buffer: CMSampleBuffer) -> Result<Vec<f32>, String> {

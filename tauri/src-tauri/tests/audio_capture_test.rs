@@ -15,7 +15,7 @@ async fn test_system_audio_capture() {
     println!("Starting system audio capture with 5 second max duration...");
 
     // Start capture with 5 second max duration
-    let result = start_capture(&state, 5).await;
+    let result = start_capture(&state, 5, None).await;
 
     if let Err(e) = result {
         panic!("Failed to start capture: {}", e);

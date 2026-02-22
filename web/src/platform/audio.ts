@@ -5,12 +5,19 @@ export const webAudio: PlatformAudio = {
     return false; // System audio capture not supported in web
   },
 
-  async startSystemAudioCapture(_maxDurationSecs: number): Promise<void> {
+  async startSystemAudioCapture(
+    _maxDurationSecs: number,
+    _inputDeviceId?: string | null,
+  ): Promise<void> {
     throw new Error('System audio capture is only available in the desktop app.');
   },
 
   async stopSystemAudioCapture(): Promise<Blob> {
     throw new Error('System audio capture is only available in the desktop app.');
+  },
+
+  async listSystemAudioInputDevices(): Promise<AudioDevice[]> {
+    return []; // Native input device listing is desktop-only
   },
 
   async listOutputDevices(): Promise<AudioDevice[]> {
