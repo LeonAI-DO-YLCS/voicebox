@@ -4,6 +4,7 @@ import { Visualizer } from 'react-sound-visualizer';
 import { Button } from '@/components/ui/button';
 import { FormControl, FormItem, FormMessage } from '@/components/ui/form';
 import { formatAudioDuration } from '@/lib/utils/audio';
+import { usePlatform } from '@/platform/PlatformContext';
 
 const MemoizedWaveform = memo(function MemoizedWaveform({
   audioStream,
@@ -38,6 +39,7 @@ interface AudioSampleRecordingProps {
   isPlaying: boolean;
   isTranscribing?: boolean;
   showWaveform?: boolean;
+  maxDurationSeconds?: number;
 }
 
 export function AudioSampleRecording({
@@ -52,12 +54,18 @@ export function AudioSampleRecording({
   isPlaying,
   isTranscribing = false,
   showWaveform = true,
+  maxDurationSeconds = 30,
 }: AudioSampleRecordingProps) {
+  const platform = usePlatform();
   const [audioStream, setAudioStream] = useState<MediaStream | null>(null);
+  const isTauriLinux =
+    platform.metadata.isTauri &&
+    typeof navigator !== 'undefined' &&
+    /linux/i.test(navigator.userAgent);
 
   // Request microphone access when component mounts
   useEffect(() => {
-    if (!showWaveform) return;
+    if (!showWaveform || isTauriLinux) return;
 
     let stream: MediaStream | null = null;
 
@@ -78,7 +86,7 @@ export function AudioSampleRecording({
         });
       }
     };
-  }, [showWaveform]);
+  }, [showWaveform, isTauriLinux]);
 
   return (
     <FormItem>
@@ -99,7 +107,7 @@ export function AudioSampleRecording({
                 Start Recording
               </Button>
               <p className="relative z-10 text-sm text-muted-foreground text-center">
-                Click to start recording. Maximum duration: 30 seconds.
+                Click to start recording. Maximum duration: {maxDurationSeconds} seconds.
               </p>
             </div>
           )}
@@ -126,7 +134,7 @@ export function AudioSampleRecording({
                 Stop Recording
               </Button>
               <p className="relative z-10 text-sm text-muted-foreground text-center">
-                {formatAudioDuration(30 - duration)} remaining
+                {formatAudioDuration(Math.max(0, maxDurationSeconds - duration))} remaining
               </p>
             </div>
           )}

@@ -24,9 +24,10 @@ import { Textarea } from '@/components/ui/textarea';
 import { useToast } from '@/components/ui/use-toast';
 import { useAudioPlayer } from '@/lib/hooks/useAudioPlayer';
 import { useAudioRecording } from '@/lib/hooks/useAudioRecording';
-import { useAddSample, useProfile } from '@/lib/hooks/useProfiles';
+import { useAddSample, useProfile, useVoiceCloneReferencePolicy } from '@/lib/hooks/useProfiles';
 import { useSystemAudioCapture } from '@/lib/hooks/useSystemAudioCapture';
 import { useTranscription } from '@/lib/hooks/useTranscription';
+import { formatAudioDuration, getAudioDuration } from '@/lib/utils/audio';
 import { usePlatform } from '@/platform/PlatformContext';
 import { AudioSampleRecording } from './AudioSampleRecording';
 import { AudioSampleSystem } from './AudioSampleSystem';
@@ -42,6 +43,13 @@ const sampleSchema = z.object({
 
 type SampleFormValues = z.infer<typeof sampleSchema>;
 
+const FALLBACK_VOICE_CLONE_POLICY = {
+  hard_min_seconds: 2,
+  recommended_target_seconds: 15,
+  hard_max_seconds: 30,
+  capture_auto_stop_seconds: 29,
+};
+
 interface SampleUploadProps {
   profileId: string;
   open: boolean;
@@ -53,9 +61,18 @@ export function SampleUpload({ profileId, open, onOpenChange }: SampleUploadProp
   const addSample = useAddSample();
   const transcribe = useTranscription();
   const { data: profile } = useProfile(profileId);
+  const { data: voiceClonePolicy } = useVoiceCloneReferencePolicy();
   const { toast } = useToast();
   const [mode, setMode] = useState<'upload' | 'record' | 'system'>('upload');
   const { isPlaying, playPause, cleanup: cleanupAudio } = useAudioPlayer();
+  const effectivePolicy = voiceClonePolicy ?? FALLBACK_VOICE_CLONE_POLICY;
+  const minAudioDurationSeconds = effectivePolicy.hard_min_seconds;
+  const maxAudioDurationSeconds = effectivePolicy.hard_max_seconds;
+  const recommendedAudioDurationSeconds = effectivePolicy.recommended_target_seconds;
+  const captureMaxDurationSeconds = Math.max(
+    1,
+    Math.min(effectivePolicy.capture_auto_stop_seconds, Math.floor(maxAudioDurationSeconds)),
+  );
 
   const form = useForm<SampleFormValues>({
     resolver: zodResolver(sampleSchema),
@@ -74,7 +91,7 @@ export function SampleUpload({ profileId, open, onOpenChange }: SampleUploadProp
     stopRecording,
     cancelRecording,
   } = useAudioRecording({
-    maxDurationSeconds: 29,
+    maxDurationSeconds: captureMaxDurationSeconds,
     onRecordingComplete: (blob, recordedDuration) => {
       // Convert blob to File object
       const file = new File([blob], `recording-${Date.now()}.webm`, {
@@ -97,11 +114,16 @@ export function SampleUpload({ profileId, open, onOpenChange }: SampleUploadProp
     duration: systemDuration,
     error: systemRecordingError,
     isSupported: isSystemAudioSupported,
+    inputDevices: systemInputDevices,
+    selectedInputDeviceId,
+    setSelectedInputDeviceId,
+    isLoadingInputDevices,
+    refreshInputDevices,
     startRecording: startSystemRecording,
     stopRecording: stopSystemRecording,
     cancelRecording: cancelSystemRecording,
   } = useSystemAudioCapture({
-    maxDurationSeconds: 29,
+    maxDurationSeconds: captureMaxDurationSeconds,
     onRecordingComplete: (blob, recordedDuration) => {
       // Convert blob to File object
       const file = new File([blob], `system-audio-${Date.now()}.wav`, {
@@ -168,6 +190,16 @@ export function SampleUpload({ profileId, open, onOpenChange }: SampleUploadProp
 
   async function onSubmit(data: SampleFormValues) {
     try {
+      const duration = await getAudioDuration(data.file as File & { recordedDuration?: number });
+      if (duration < minAudioDurationSeconds || duration > maxAudioDurationSeconds) {
+        const durationText = formatAudioDuration(duration);
+        const minText = formatAudioDuration(minAudioDurationSeconds);
+        const maxText = formatAudioDuration(maxAudioDurationSeconds);
+        throw new Error(
+          `Audio duration ${durationText} is outside allowed bounds (${minText} to ${maxText}).`,
+        );
+      }
+
       await addSample.mutateAsync({
         profileId,
         file: data.file,
@@ -264,6 +296,8 @@ export function SampleUpload({ profileId, open, onOpenChange }: SampleUploadProp
                       isPlaying={isPlaying}
                       isTranscribing={transcribe.isPending}
                       fieldName={name}
+                      recommendedDurationSeconds={recommendedAudioDurationSeconds}
+                      maxDurationSeconds={maxAudioDurationSeconds}
                     />
                   )}
                 />
@@ -285,6 +319,7 @@ export function SampleUpload({ profileId, open, onOpenChange }: SampleUploadProp
                       onPlayPause={handlePlayPause}
                       isPlaying={isPlaying}
                       isTranscribing={transcribe.isPending}
+                      maxDurationSeconds={captureMaxDurationSeconds}
                     />
                   )}
                 />
@@ -300,6 +335,11 @@ export function SampleUpload({ profileId, open, onOpenChange }: SampleUploadProp
                         file={selectedFile}
                         isRecording={isSystemRecording}
                         duration={systemDuration}
+                        inputDevices={systemInputDevices}
+                        selectedInputDeviceId={selectedInputDeviceId}
+                        onSelectInputDevice={setSelectedInputDeviceId}
+                        onRefreshInputDevices={refreshInputDevices}
+                        isLoadingInputDevices={isLoadingInputDevices}
                         onStart={startSystemRecording}
                         onStop={stopSystemRecording}
                         onCancel={handleCancelRecording}
@@ -307,6 +347,7 @@ export function SampleUpload({ profileId, open, onOpenChange }: SampleUploadProp
                         onPlayPause={handlePlayPause}
                         isPlaying={isPlaying}
                         isTranscribing={transcribe.isPending}
+                        maxDurationSeconds={captureMaxDurationSeconds}
                       />
                     )}
                   />

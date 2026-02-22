@@ -41,8 +41,9 @@ export interface AudioDevice {
 
 export interface PlatformAudio {
   isSystemAudioSupported(): boolean;
-  startSystemAudioCapture(maxDurationSecs: number): Promise<void>;
+  startSystemAudioCapture(maxDurationSecs: number, inputDeviceId?: string | null): Promise<void>;
   stopSystemAudioCapture(): Promise<Blob>;
+  listSystemAudioInputDevices(): Promise<AudioDevice[]>;
   listOutputDevices(): Promise<AudioDevice[]>;
   playToDevices(audioData: Uint8Array, deviceIds: string[]): Promise<void>;
   stopPlayback(): void;

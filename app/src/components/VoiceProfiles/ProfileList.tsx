@@ -1,6 +1,7 @@
 import { Mic, Sparkles } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
+import { getErrorDisplayDetails } from '@/lib/errors';
 import { useProfiles } from '@/lib/hooks/useProfiles';
 import { useUIStore } from '@/stores/uiStore';
 import { ProfileCard } from './ProfileCard';
@@ -15,9 +16,28 @@ export function ProfileList() {
   }
 
   if (error) {
+    const errorDetails = getErrorDisplayDetails(error, 'Failed to load voice profiles');
     return (
       <div className="flex items-center justify-center p-8">
-        <div className="text-destructive">Error loading profiles: {error.message}</div>
+        <div className="max-w-2xl w-full rounded-lg border border-destructive/40 bg-destructive/5 p-4 text-sm space-y-2">
+          <p className="font-semibold text-destructive">{errorDetails.title}</p>
+          <p className="text-destructive/90">{errorDetails.summary}</p>
+          {errorDetails.hint && (
+            <p className="text-muted-foreground">
+              <span className="font-medium">What to check:</span> {errorDetails.hint}
+            </p>
+          )}
+          {errorDetails.technical && (
+            <details className="pt-1">
+              <summary className="cursor-pointer text-xs text-muted-foreground">
+                Technical details
+              </summary>
+              <pre className="mt-2 whitespace-pre-wrap break-all text-xs text-muted-foreground bg-background/60 p-2 rounded-md border">
+                {errorDetails.technical}
+              </pre>
+            </details>
+          )}
+        </div>
       </div>
     );
   }

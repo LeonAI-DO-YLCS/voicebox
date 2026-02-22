@@ -26,6 +26,24 @@ export interface ProfileSampleResponse {
   profile_id: string;
   audio_path: string;
   reference_text: string;
+  selection_start_ms?: number;
+  selection_end_ms?: number;
+  source_duration_ms?: number;
+  selection_metrics_json?: string;
+  selection_fallback_reason?: string;
+  selection_policy_version?: string;
+}
+
+export interface VoiceCloneReferencePolicyResponse {
+  hard_min_seconds: number;
+  recommended_target_seconds: number;
+  hard_max_seconds: number;
+  capture_auto_stop_seconds: number;
+  min_rms: number;
+  max_silence_ratio: number;
+  max_clipping_ratio: number;
+  selection_step_seconds: number;
+  policy_version: string;
 }
 
 export interface GenerationRequest {

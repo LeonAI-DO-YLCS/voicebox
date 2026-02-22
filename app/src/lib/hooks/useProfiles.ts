@@ -63,6 +63,13 @@ export function useProfileSamples(profileId: string) {
   });
 }
 
+export function useVoiceCloneReferencePolicy() {
+  return useQuery({
+    queryKey: ['voice-clone', 'policy'],
+    queryFn: () => apiClient.getVoiceCloneReferencePolicy(),
+  });
+}
+
 export function useAddSample() {
   const queryClient = useQueryClient();
 

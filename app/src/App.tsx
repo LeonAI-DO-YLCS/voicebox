@@ -36,6 +36,7 @@ const LOADING_MESSAGES = [
 function App() {
   const platform = usePlatform();
   const [serverReady, setServerReady] = useState(false);
+  const [serverStartError, setServerStartError] = useState<string | null>(null);
   const [loadingMessageIndex, setLoadingMessageIndex] = useState(0);
   const serverStartingRef = useRef(false);
 
@@ -63,7 +64,7 @@ function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [platform.lifecycle]);
 
-  // Setup window close handler and auto-start server when running in Tauri (production only)
+  // Setup window close handler and auto-start server when running in Tauri
   useEffect(() => {
     if (!platform.metadata.isTauri) {
       setServerReady(true); // Web assumes server is running
@@ -76,24 +77,21 @@ function App() {
       console.error('Failed to setup window close handler:', error);
     });
 
-    // Only auto-start server in production mode
-    // In dev mode, user runs server separately
-    if (!import.meta.env?.PROD) {
-      console.log('Dev mode: Skipping auto-start of server (run it separately)');
-      setServerReady(true); // Mark as ready so UI doesn't show loading screen
-      // Mark that server was not started by app (so we don't try to stop it on close)
-      // @ts-expect-error - adding property to window
-      window.__voiceboxServerStartedByApp = false;
+    if (serverStartingRef.current) {
       return;
     }
-
-    // Auto-start server in production
-    if (serverStartingRef.current) {
+    // React StrictMode runs effects twice in development.
+    // Keep a window-scoped guard so we don't issue duplicate start requests.
+    // @ts-expect-error - adding property to window
+    if (window.__voiceboxServerStartRequested) {
       return;
     }
 
     serverStartingRef.current = true;
-    console.log('Production mode: Starting bundled server...');
+    // @ts-expect-error - adding property to window
+    window.__voiceboxServerStartRequested = true;
+    setServerStartError(null);
+    console.log('Starting Voicebox server...');
 
     platform.lifecycle
       .startServer(false)
@@ -108,7 +106,10 @@ function App() {
       })
       .catch((error) => {
         console.error('Failed to auto-start server:', error);
+        setServerStartError(error instanceof Error ? error.message : String(error));
         serverStartingRef.current = false;
+        // @ts-expect-error - adding property to window
+        window.__voiceboxServerStartRequested = false;
         // @ts-expect-error - adding property to window
         window.__voiceboxServerStartedByApp = false;
       });
@@ -166,6 +167,11 @@ function App() {
               shineColor="hsl(var(--foreground))"
             />
           </div>
+          {serverStartError && (
+            <div className="max-w-lg mx-auto text-sm text-destructive">
+              Failed to start local server: {serverStartError}
+            </div>
+          )}
         </div>
       </div>
     );

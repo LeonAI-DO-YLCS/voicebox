@@ -1,6 +1,8 @@
-import { Mic, Monitor, Pause, Play, Square } from 'lucide-react';
+import { Mic, Monitor, Pause, Play, RotateCw, Square } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { FormControl, FormItem, FormMessage } from '@/components/ui/form';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import type { AudioDevice } from '@/platform/types';
 import { formatAudioDuration } from '@/lib/utils/audio';
 
 interface AudioSampleSystemProps {
@@ -13,7 +15,13 @@ interface AudioSampleSystemProps {
   onTranscribe: () => void;
   onPlayPause: () => void;
   isPlaying: boolean;
+  inputDevices: AudioDevice[];
+  selectedInputDeviceId: string | null;
+  onSelectInputDevice: (deviceId: string) => void;
+  onRefreshInputDevices?: () => void;
+  isLoadingInputDevices?: boolean;
   isTranscribing?: boolean;
+  maxDurationSeconds?: number;
 }
 
 export function AudioSampleSystem({
@@ -26,20 +34,66 @@ export function AudioSampleSystem({
   onTranscribe,
   onPlayPause,
   isPlaying,
+  inputDevices,
+  selectedInputDeviceId,
+  onSelectInputDevice,
+  onRefreshInputDevices,
+  isLoadingInputDevices = false,
   isTranscribing = false,
+  maxDurationSeconds = 30,
 }: AudioSampleSystemProps) {
+  const hasInputDevices = inputDevices.length > 0;
+
   return (
     <FormItem>
       <FormControl>
         <div className="space-y-4">
           {!isRecording && !file && (
             <div className="flex flex-col items-center justify-center gap-4 p-4 border-2 border-dashed rounded-lg min-h-[180px]">
+              {hasInputDevices && (
+                <div className="w-full max-w-md space-y-2">
+                  <p className="text-sm text-muted-foreground">Audio Input Source</p>
+                  <div className="flex gap-2">
+                    <Select
+                      value={selectedInputDeviceId ?? undefined}
+                      onValueChange={onSelectInputDevice}
+                      disabled={isLoadingInputDevices}
+                    >
+                      <SelectTrigger className="flex-1">
+                        <SelectValue placeholder="Select input source" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {inputDevices.map((device) => (
+                          <SelectItem key={device.id} value={device.id}>
+                            {device.name}
+                            {device.is_default ? ' (Default)' : ''}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                    {onRefreshInputDevices && (
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="icon"
+                        onClick={onRefreshInputDevices}
+                        disabled={isLoadingInputDevices}
+                        aria-label="Refresh audio input devices"
+                      >
+                        <RotateCw className={`h-4 w-4 ${isLoadingInputDevices ? 'animate-spin' : ''}`} />
+                      </Button>
+                    )}
+                  </div>
+                </div>
+              )}
               <Button type="button" onClick={onStart} size="lg" className="flex items-center gap-2">
                 <Monitor className="h-5 w-5" />
                 Start Capture
               </Button>
               <p className="text-sm text-muted-foreground text-center">
-                Capture audio from your system. Maximum duration: 30 seconds.
+                Capture system audio or microphone input. On Linux/WSL, all host-exposed inputs are
+                listed above and the host default is selected automatically.
+                Maximum duration: {maxDurationSeconds} seconds.
               </p>
             </div>
           )}
@@ -64,7 +118,7 @@ export function AudioSampleSystem({
                 Stop Capture
               </Button>
               <p className="text-sm text-muted-foreground text-center">
-                {formatAudioDuration(30 - duration)} remaining
+                {formatAudioDuration(Math.max(0, maxDurationSeconds - duration))} remaining
               </p>
             </div>
           )}

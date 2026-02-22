@@ -1,6 +1,7 @@
 import { Loader2, XCircle } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { getErrorDisplayDetails } from '@/lib/errors';
 import { useServerHealth } from '@/lib/hooks/useServer';
 import { useServerStore } from '@/stores/serverStore';
 import { ModelProgress } from './ModelProgress';
@@ -24,6 +25,8 @@ export function ServerStatus() {
         <div className="space-y-2">
           <ModelProgress modelName="qwen-tts-1.7B" displayName="Qwen TTS 1.7B" />
           <ModelProgress modelName="qwen-tts-0.6B" displayName="Qwen TTS 0.6B" />
+          <ModelProgress modelName="whisper-turbo" displayName="Whisper Turbo (Large-v3 Turbo)" />
+          <ModelProgress modelName="whisper-large-v3" displayName="Whisper Large-v3" />
           <ModelProgress modelName="whisper-base" displayName="Whisper Base" />
           <ModelProgress modelName="whisper-small" displayName="Whisper Small" />
           <ModelProgress modelName="whisper-medium" displayName="Whisper Medium" />
@@ -36,10 +39,33 @@ export function ServerStatus() {
             <span className="text-sm">Checking connection...</span>
           </div>
         ) : error ? (
-          <div className="flex items-center gap-2">
-            <XCircle className="h-4 w-4 text-destructive" />
-            <span className="text-sm text-destructive">Connection failed: {error.message}</span>
-          </div>
+          (() => {
+            const errorDetails = getErrorDisplayDetails(error, 'Connection failed');
+            return (
+              <div className="space-y-2 rounded-md border border-destructive/30 bg-destructive/5 p-3">
+                <div className="flex items-center gap-2">
+                  <XCircle className="h-4 w-4 text-destructive" />
+                  <span className="text-sm font-medium text-destructive">{errorDetails.title}</span>
+                </div>
+                <p className="text-sm text-destructive/90">{errorDetails.summary}</p>
+                {errorDetails.hint && (
+                  <p className="text-xs text-muted-foreground">
+                    <span className="font-medium">What to check:</span> {errorDetails.hint}
+                  </p>
+                )}
+                {errorDetails.technical && (
+                  <details>
+                    <summary className="cursor-pointer text-xs text-muted-foreground">
+                      Technical details
+                    </summary>
+                    <pre className="mt-2 whitespace-pre-wrap break-all text-xs text-muted-foreground bg-background/60 p-2 rounded-md border">
+                      {errorDetails.technical}
+                    </pre>
+                  </details>
+                )}
+              </div>
+            );
+          })()
         ) : health ? (
           <div className="space-y-2">
             <div className="flex items-center gap-2">

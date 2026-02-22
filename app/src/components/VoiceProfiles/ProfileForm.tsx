@@ -40,6 +40,7 @@ import {
   useProfile,
   useUpdateProfile,
   useUploadAvatar,
+  useVoiceCloneReferencePolicy,
 } from '@/lib/hooks/useProfiles';
 import { useSystemAudioCapture } from '@/lib/hooks/useSystemAudioCapture';
 import { useTranscription } from '@/lib/hooks/useTranscription';
@@ -52,7 +53,12 @@ import { AudioSampleSystem } from './AudioSampleSystem';
 import { AudioSampleUpload } from './AudioSampleUpload';
 import { SampleList } from './SampleList';
 
-const MAX_AUDIO_DURATION_SECONDS = 30;
+const FALLBACK_VOICE_CLONE_POLICY = {
+  hard_min_seconds: 2,
+  recommended_target_seconds: 15,
+  hard_max_seconds: 30,
+  capture_auto_stop_seconds: 29,
+};
 
 const baseProfileSchema = z.object({
   name: z.string().min(1, 'Name is required').max(100),
@@ -125,6 +131,14 @@ export function ProfileForm() {
   const { isPlaying, playPause, cleanup: cleanupAudio } = useAudioPlayer();
   const isCreating = !editingProfileId;
   const serverUrl = useServerStore((state) => state.serverUrl);
+  const { data: voiceClonePolicy } = useVoiceCloneReferencePolicy();
+  const effectivePolicy = voiceClonePolicy ?? FALLBACK_VOICE_CLONE_POLICY;
+  const maxAudioDurationSeconds = effectivePolicy.hard_max_seconds;
+  const recommendedAudioDurationSeconds = effectivePolicy.recommended_target_seconds;
+  const captureMaxDurationSeconds = Math.max(
+    1,
+    Math.min(effectivePolicy.capture_auto_stop_seconds, Math.floor(maxAudioDurationSeconds)),
+  );
 
   const form = useForm<ProfileFormValues>({
     resolver: zodResolver(profileSchema),
@@ -148,10 +162,15 @@ export function ProfileForm() {
       getAudioDuration(selectedFile as File & { recordedDuration?: number })
         .then((duration) => {
           setAudioDuration(duration);
-          if (duration > MAX_AUDIO_DURATION_SECONDS) {
+          if (duration < effectivePolicy.hard_min_seconds) {
             form.setError('sampleFile', {
               type: 'manual',
-              message: `Audio is too long (${formatAudioDuration(duration)}). Maximum duration is ${formatAudioDuration(MAX_AUDIO_DURATION_SECONDS)}.`,
+              message: `Audio is too short (${formatAudioDuration(duration)}). Minimum duration is ${formatAudioDuration(effectivePolicy.hard_min_seconds)}.`,
+            });
+          } else if (duration > maxAudioDurationSeconds) {
+            form.setError('sampleFile', {
+              type: 'manual',
+              message: `Audio is too long (${formatAudioDuration(duration)}). Maximum duration is ${formatAudioDuration(maxAudioDurationSeconds)}.`,
             });
           } else {
             form.clearErrors('sampleFile');
@@ -181,7 +200,7 @@ export function ProfileForm() {
       setAudioDuration(null);
       form.clearErrors('sampleFile');
     }
-  }, [selectedFile, form]);
+  }, [selectedFile, form, maxAudioDurationSeconds]);
 
   const {
     isRecording,
@@ -191,7 +210,7 @@ export function ProfileForm() {
     stopRecording,
     cancelRecording,
   } = useAudioRecording({
-    maxDurationSeconds: 29,
+    maxDurationSeconds: captureMaxDurationSeconds,
     onRecordingComplete: (blob, recordedDuration) => {
       const file = new File([blob], `recording-${Date.now()}.webm`, {
         type: blob.type || 'audio/webm',
@@ -213,11 +232,16 @@ export function ProfileForm() {
     duration: systemDuration,
     error: systemRecordingError,
     isSupported: isSystemAudioSupported,
+    inputDevices: systemInputDevices,
+    selectedInputDeviceId,
+    setSelectedInputDeviceId,
+    isLoadingInputDevices,
+    refreshInputDevices,
     startRecording: startSystemRecording,
     stopRecording: stopSystemRecording,
     cancelRecording: cancelSystemRecording,
   } = useSystemAudioCapture({
-    maxDurationSeconds: 29,
+    maxDurationSeconds: captureMaxDurationSeconds,
     onRecordingComplete: (blob, recordedDuration) => {
       const file = new File([blob], `system-audio-${Date.now()}.wav`, {
         type: blob.type || 'audio/wav',
@@ -473,14 +497,26 @@ export function ProfileForm() {
         // Validate audio duration before creating profile
         try {
           const duration = await getAudioDuration(sampleFile);
-          if (duration > MAX_AUDIO_DURATION_SECONDS) {
+          if (duration < effectivePolicy.hard_min_seconds) {
             form.setError('sampleFile', {
               type: 'manual',
-              message: `Audio is too long (${formatAudioDuration(duration)}). Maximum duration is ${formatAudioDuration(MAX_AUDIO_DURATION_SECONDS)}.`,
+              message: `Audio is too short (${formatAudioDuration(duration)}). Minimum duration is ${formatAudioDuration(effectivePolicy.hard_min_seconds)}.`,
             });
             toast({
               title: 'Invalid audio file',
-              description: `Audio duration is ${formatAudioDuration(duration)}, but maximum is ${formatAudioDuration(MAX_AUDIO_DURATION_SECONDS)}.`,
+              description: `Audio duration is ${formatAudioDuration(duration)}, but minimum is ${formatAudioDuration(effectivePolicy.hard_min_seconds)}.`,
+              variant: 'destructive',
+            });
+            return; // Prevent form submission
+          }
+          if (duration > maxAudioDurationSeconds) {
+            form.setError('sampleFile', {
+              type: 'manual',
+              message: `Audio is too long (${formatAudioDuration(duration)}). Maximum duration is ${formatAudioDuration(maxAudioDurationSeconds)}.`,
+            });
+            toast({
+              title: 'Invalid audio file',
+              description: `Audio duration is ${formatAudioDuration(duration)}, but maximum is ${formatAudioDuration(maxAudioDurationSeconds)}.`,
               variant: 'destructive',
             });
             return; // Prevent form submission
@@ -711,9 +747,11 @@ export function ProfileForm() {
                                 isTranscribing={transcribe.isPending}
                                 isDisabled={
                                   audioDuration !== null &&
-                                  audioDuration > MAX_AUDIO_DURATION_SECONDS
+                                  audioDuration > maxAudioDurationSeconds
                                 }
                                 fieldName={name}
+                                recommendedDurationSeconds={recommendedAudioDurationSeconds}
+                                maxDurationSeconds={maxAudioDurationSeconds}
                               />
                             )}
                           />
@@ -735,6 +773,7 @@ export function ProfileForm() {
                                 onPlayPause={handlePlayPause}
                                 isPlaying={isPlaying}
                                 isTranscribing={transcribe.isPending}
+                                maxDurationSeconds={captureMaxDurationSeconds}
                               />
                             )}
                           />
@@ -750,6 +789,11 @@ export function ProfileForm() {
                                   file={selectedFile}
                                   isRecording={isSystemRecording}
                                   duration={systemDuration}
+                                  inputDevices={systemInputDevices}
+                                  selectedInputDeviceId={selectedInputDeviceId}
+                                  onSelectInputDevice={setSelectedInputDeviceId}
+                                  onRefreshInputDevices={refreshInputDevices}
+                                  isLoadingInputDevices={isLoadingInputDevices}
                                   onStart={startSystemRecording}
                                   onStop={stopSystemRecording}
                                   onCancel={handleCancelRecording}
@@ -757,6 +801,7 @@ export function ProfileForm() {
                                   onPlayPause={handlePlayPause}
                                   isPlaying={isPlaying}
                                   isTranscribing={transcribe.isPending}
+                                  maxDurationSeconds={captureMaxDurationSeconds}
                                 />
                               )}
                             />

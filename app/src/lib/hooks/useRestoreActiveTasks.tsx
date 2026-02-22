@@ -80,6 +80,8 @@ export function useRestoreActiveTasks() {
 export const MODEL_DISPLAY_NAMES: Record<string, string> = {
   'qwen-tts-1.7B': 'Qwen TTS 1.7B',
   'qwen-tts-0.6B': 'Qwen TTS 0.6B',
+  'whisper-turbo': 'Whisper Turbo (Large-v3 Turbo)',
+  'whisper-large-v3': 'Whisper Large-v3',
   'whisper-base': 'Whisper Base',
   'whisper-small': 'Whisper Small',
   'whisper-medium': 'Whisper Medium',

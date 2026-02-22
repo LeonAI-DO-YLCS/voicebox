@@ -317,9 +317,9 @@ export function SampleList({ profileId }: SampleListProps) {
       </Button>
 
       <p className="text-xs text-muted-foreground text-center px-2">
-        Note: A single 30-second sample is the sweet spot. Quality may decrease with multiple
-        samples. In a future update samples might be interchangeable and tagged for varying styles
-        of the same voice.
+        Note: A single clean sample near the recommended duration is usually best. Quality may
+        decrease with multiple samples. In a future update samples might be interchangeable and
+        tagged for varying styles of the same voice.
       </p>
 
       <SampleUpload profileId={profileId} open={uploadOpen} onOpenChange={setUploadOpen} />

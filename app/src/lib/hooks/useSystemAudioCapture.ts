@@ -1,5 +1,6 @@
 import { useState, useRef, useCallback, useEffect } from 'react';
 import { usePlatform } from '@/platform/PlatformContext';
+import type { AudioDevice } from '@/platform/types';
 
 interface UseSystemAudioCaptureOptions {
   maxDurationSeconds?: number;
@@ -8,7 +9,8 @@ interface UseSystemAudioCaptureOptions {
 
 /**
  * Hook for native system audio capture using Tauri commands.
- * Uses ScreenCaptureKit on macOS and WASAPI loopback on Windows.
+ * Uses ScreenCaptureKit on macOS, WASAPI loopback on Windows,
+ * and CPAL input capture on Linux/WSL with selectable host input devices.
  */
 export function useSystemAudioCapture({
   maxDurationSeconds = 29,
@@ -19,16 +21,78 @@ export function useSystemAudioCapture({
   const [duration, setDuration] = useState(0);
   const [error, setError] = useState<string | null>(null);
   const [isSupported, setIsSupported] = useState(false);
+  const [inputDevices, setInputDevices] = useState<AudioDevice[]>([]);
+  const [selectedInputDeviceId, setSelectedInputDeviceId] = useState<string | null>(null);
+  const [isLoadingInputDevices, setIsLoadingInputDevices] = useState(false);
   const timerRef = useRef<number | null>(null);
   const startTimeRef = useRef<number | null>(null);
   const stopRecordingRef = useRef<(() => Promise<void>) | null>(null);
   const isRecordingRef = useRef(false);
 
+  const refreshInputDevices = useCallback(async () => {
+    if (!platform.metadata.isTauri) {
+      setInputDevices([]);
+      setSelectedInputDeviceId(null);
+      return;
+    }
+
+    try {
+      setIsLoadingInputDevices(true);
+      const devices = await platform.audio.listSystemAudioInputDevices();
+      setInputDevices(devices);
+      setSelectedInputDeviceId((currentId) => {
+        if (currentId && devices.some((d) => d.id === currentId)) {
+          return currentId;
+        }
+        const defaultDevice = devices.find((d) => d.is_default);
+        return defaultDevice?.id ?? devices[0]?.id ?? null;
+      });
+    } catch (err) {
+      console.error('Failed to list system audio input devices:', err);
+      setInputDevices([]);
+      setSelectedInputDeviceId(null);
+    } finally {
+      setIsLoadingInputDevices(false);
+    }
+  }, [platform]);
+
   // Check if system audio capture is supported
   useEffect(() => {
-    const supported = platform.audio.isSystemAudioSupported();
-    setIsSupported(supported);
-  }, [platform]);
+    let mounted = true;
+
+    const checkSupport = async () => {
+      if (!platform.metadata.isTauri) {
+        if (mounted) {
+          setIsSupported(false);
+        }
+        return;
+      }
+
+      try {
+        // Dynamic import keeps web builds decoupled from Tauri runtime APIs.
+        const { invoke } = await import('@tauri-apps/api/core');
+        const supported = await invoke<boolean>('is_system_audio_supported');
+        if (mounted) {
+          const isCaptureSupported = Boolean(supported);
+          setIsSupported(isCaptureSupported);
+          if (isCaptureSupported) {
+            await refreshInputDevices();
+          }
+        }
+      } catch {
+        if (mounted) {
+          setIsSupported(platform.audio.isSystemAudioSupported());
+          await refreshInputDevices();
+        }
+      }
+    };
+
+    void checkSupport();
+
+    return () => {
+      mounted = false;
+    };
+  }, [platform, refreshInputDevices]);
 
   const startRecording = useCallback(async () => {
     if (!platform.metadata.isTauri) {
@@ -48,7 +112,7 @@ export function useSystemAudioCapture({
       setDuration(0);
 
       // Start native capture
-      await platform.audio.startSystemAudioCapture(maxDurationSeconds);
+      await platform.audio.startSystemAudioCapture(maxDurationSeconds, selectedInputDeviceId);
 
       setIsRecording(true);
       isRecordingRef.current = true;
@@ -74,7 +138,7 @@ export function useSystemAudioCapture({
       setError(errorMessage);
       setIsRecording(false);
     }
-  }, [maxDurationSeconds, isSupported, platform]);
+  }, [maxDurationSeconds, isSupported, platform, selectedInputDeviceId]);
 
   const stopRecording = useCallback(async () => {
     if (!isRecording || !platform.metadata.isTauri) {
@@ -150,6 +214,11 @@ export function useSystemAudioCapture({
     duration,
     error,
     isSupported,
+    inputDevices,
+    selectedInputDeviceId,
+    setSelectedInputDeviceId,
+    isLoadingInputDevices,
+    refreshInputDevices,
     startRecording,
     stopRecording,
     cancelRecording,
