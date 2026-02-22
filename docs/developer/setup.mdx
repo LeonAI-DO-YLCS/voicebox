@@ -7,7 +7,7 @@ description: "Set up your local development environment for Voicebox"
 
 Before you begin, ensure you have the following installed:
 
-<CardGroup cols={3}>
+<CardGroup cols={4}>
   <Card title="Bun" icon="package">
     [Download Bun](https://bun.sh)
     ```bash
@@ -24,6 +24,12 @@ Before you begin, ensure you have the following installed:
     [Install Rust](https://rustup.rs)
     ```bash
     rustc --version
+    ```
+  </Card>
+  <Card title="uv" icon="bolt">
+    [Install uv](https://docs.astral.sh/uv/getting-started/installation/)
+    ```bash
+    uv --version
     ```
   </Card>
 </CardGroup>
@@ -67,68 +73,42 @@ This installs dependencies for:
 ### 2. Set Up Python Backend
 
 ```bash
-cd backend
-
-# Create virtual environment
-python -m venv venv
-
-# Activate virtual environment
-source venv/bin/activate  # macOS/Linux
-# or
-venv\Scripts\activate  # Windows
-
-# Install Python dependencies
-pip install -r requirements.txt
-
-# Install MLX dependencies (Apple Silicon only - for faster inference)
-# On Apple Silicon, this enables native Metal acceleration
-if [[ $(uname -m) == "arm64" ]]; then
-  pip install -r requirements-mlx.txt
-fi
-
-# Install Qwen3-TTS
-pip install git+https://github.com/QwenLM/Qwen3-TTS.git
+bun run setup:python
 ```
 
 ## Running in Development
 
-Development requires **two terminals**: one for the Python backend, one for the Tauri app.
+For desktop development, a single command starts everything with automatic port fallback.
 
 <Tabs>
-  <Tab title="Terminal 1: Backend">
-    Start the Python server first:
-
-    ```bash
-    cd backend
-    source venv/bin/activate  # Activate venv
-    bun run dev:server
-    ```
-
-    Or manually:
-    ```bash
-    uvicorn main:app --reload --port 17493
-    ```
-
-    Backend will be available at `http://localhost:17493`
-  </Tab>
-
-  <Tab title="Terminal 2: Desktop App">
-    Then start the Tauri app:
+  <Tab title="Desktop (Recommended)">
+    Start desktop app + backend together:
 
     ```bash
     bun run dev
     ```
 
     This will:
-    - Create a placeholder sidecar binary
-    - Start Vite dev server on port 5173
+    - Use `backend/.venv` (uv-managed Python environment)
+    - Start backend on `17493` or next free port
+    - Start Vite on `5173` or next free port
     - Launch Tauri window
     - Enable hot reload
+  </Tab>
+
+  <Tab title="Backend Only">
+    Start only the backend server:
+
+    ```bash
+    bun run dev:server
+    ```
+
+    Backend will be available at `http://127.0.0.1:17493` or the next free port.
   </Tab>
 </Tabs>
 
 <Info>
-  In dev mode, the app connects to your manually-started Python server. The bundled server binary is only used in production builds.
+  Python setup is now standardized on `uv`. Run `bun run setup:python` once before development.
 </Info>
 
 ### Optional: Web App
@@ -218,9 +198,9 @@ This downloads the OpenAPI schema and generates the TypeScript client in `app/sr
 <AccordionGroup>
   <Accordion title="Backend won't start">
     - Check Python version (must be 3.11+)
-    - Ensure virtual environment is activated
-    - Verify all dependencies are installed: `pip install -r requirements.txt`
-    - Check if port 17493 is available
+    - Ensure `uv` is installed
+    - Run `bun run setup:python` to rebuild `backend/.venv`
+    - Check terminal output for the final backend port
   </Accordion>
 
   <Accordion title="Tauri build fails">
@@ -230,9 +210,9 @@ This downloads the OpenAPI schema and generates the TypeScript client in `app/sr
   </Accordion>
 
   <Accordion title="OpenAPI client generation fails">
-    - Ensure backend is running: `curl http://localhost:17493/openapi.json`
+    - Ensure backend is running: `curl http://127.0.0.1:17493/openapi.json`
     - Check network connectivity
-    - Verify the backend is accessible at localhost:17493
+    - Verify the backend is accessible at the printed backend URL
   </Accordion>
 </AccordionGroup>
 

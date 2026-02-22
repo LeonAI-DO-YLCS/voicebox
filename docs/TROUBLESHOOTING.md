@@ -103,7 +103,7 @@ chmod +x voicebox-*.AppImage
 
 2. **Check MLX installation**
    ```bash
-   pip install -r backend/requirements-mlx.txt
+   bun run setup:python
    ```
 
 3. **Verify backend detection**
@@ -134,7 +134,7 @@ chmod +x voicebox-*.AppImage
 1. **Check backend type** (Apple Silicon)
    - Check Settings → Server Status
    - Should show "Backend: MLX" on Apple Silicon
-   - If showing "Backend: PYTORCH", install MLX: `pip install -r backend/requirements-mlx.txt`
+   - If showing "Backend: PYTORCH", run `bun run setup:python` to reinstall MLX-capable backend deps
    - MLX provides 4-5x faster inference on Apple Silicon
 
 2. **Use GPU** (if available)
@@ -162,7 +162,7 @@ chmod +x voicebox-*.AppImage
 **Solutions:**
 1. **Check server is running**
    ```bash
-   curl http://localhost:8000/health
+   curl http://127.0.0.1:17493/health
    ```
 
 2. **Check remote mode**
@@ -276,7 +276,7 @@ chmod +x voicebox-*.AppImage
 
 2. **Check OpenAPI endpoint**
    ```bash
-   curl http://localhost:8000/openapi.json
+   curl http://127.0.0.1:17493/openapi.json
    ```
 
 3. **Regenerate client**

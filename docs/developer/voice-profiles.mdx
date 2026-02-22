@@ -43,6 +43,12 @@ class ProfileSample(Base):
     profile_id = Column(String, ForeignKey("profiles.id"))
     audio_path = Column(String, nullable=False)
     reference_text = Column(Text, nullable=False)
+    selection_start_ms = Column(Integer, default=0)
+    selection_end_ms = Column(Integer, default=0)
+    source_duration_ms = Column(Integer, default=0)
+    selection_metrics_json = Column(Text, nullable=True)
+    selection_fallback_reason = Column(Text, nullable=True)
+    selection_policy_version = Column(String, nullable=True)
 ```
 
 ## File Structure
@@ -92,23 +98,46 @@ async def add_profile_sample(
     reference_text: str,
     db: Session,
 ) -> ProfileSampleResponse:
-    # 1. Validate audio (duration, format, quality)
-    is_valid, error_msg = validate_reference_audio(audio_path)
+    policy = config.get_voice_clone_reference_policy()
+
+    # 1. Validate audio against policy bounds
+    is_valid, error_msg = validate_reference_audio(
+        audio_path,
+        min_duration=policy.hard_min_seconds,
+        max_duration=policy.hard_max_seconds,
+        min_rms=policy.min_rms,
+    )
     if not is_valid:
         raise ValueError(f"Invalid reference audio: {error_msg}")
     
-    # 2. Copy to profile directory
+    # 2. Select best bounded segment for long references
     sample_id = str(uuid.uuid4())
     dest_path = profile_dir / f"{sample_id}.wav"
     audio, sr = load_audio(audio_path)
-    save_audio(audio, str(dest_path), sr)
+    selected_audio, selection_meta = select_best_reference_segment(
+        audio=audio,
+        sample_rate=sr,
+        recommended_target_seconds=policy.recommended_target_seconds,
+        min_rms=policy.min_rms,
+        max_silence_ratio=policy.max_silence_ratio,
+        max_clipping_ratio=policy.max_clipping_ratio,
+        selection_step_seconds=policy.selection_step_seconds,
+        policy_version=policy.policy_version,
+    )
+    save_audio(selected_audio, str(dest_path), sr)
     
-    # 3. Create database record
+    # 3. Create database record with selection metadata
     db_sample = DBProfileSample(
         id=sample_id,
         profile_id=profile_id,
         audio_path=str(dest_path),
         reference_text=reference_text,
+        selection_start_ms=selection_meta["selected_start_ms"],
+        selection_end_ms=selection_meta["selected_end_ms"],
+        source_duration_ms=selection_meta["source_duration_ms"],
+        selection_metrics_json=json.dumps(selection_meta["metrics"]),
+        selection_fallback_reason=selection_meta["fallback_reason"],
+        selection_policy_version=selection_meta["policy_version"],
     )
     db.add(db_sample)
     db.commit()
@@ -149,10 +178,35 @@ async def create_voice_prompt_for_profile(
 
 Reference audio is validated before being accepted:
 
-- **Duration:** 3-30 seconds recommended
+- **Duration bounds:** `hard_min_seconds <= duration <= hard_max_seconds`
+- **Recommended target:** Long inputs are reduced to a selected segment of `recommended_target_seconds`
 - **Format:** WAV, MP3, FLAC, OGG supported
 - **Sample Rate:** Resampled to 24kHz
 - **Channels:** Converted to mono if stereo
+- **Quality checks:** RMS floor, silence ratio threshold, clipping risk threshold
+
+## Runtime Policy
+
+Voice cloning policy is backend-owned and configurable through environment variables:
+
+- `VOICE_CLONE_REF_HARD_MIN_SECONDS` (default `2`)
+- `VOICE_CLONE_REF_RECOMMENDED_TARGET_SECONDS` (default `15`)
+- `VOICE_CLONE_REF_HARD_MAX_SECONDS` (default `60`)
+- `VOICE_CLONE_REF_CAPTURE_AUTO_STOP_SECONDS` (default `29`)
+- `VOICE_CLONE_REF_MIN_RMS` (default `0.01`)
+- `VOICE_CLONE_REF_MAX_SILENCE_RATIO` (default `0.45`)
+- `VOICE_CLONE_REF_MAX_CLIPPING_RATIO` (default `0.02`)
+- `VOICE_CLONE_REF_SELECTION_STEP_SECONDS` (default `0.5`)
+- `VOICE_CLONE_REF_POLICY_VERSION` (default `v1`)
+
+If config is invalid at startup, Voicebox falls back to safe defaults and logs a warning.
+
+### Tuning Guidance
+
+- Increase `recommended_target_seconds` gradually (for example 15 -> 20) before raising hard max.
+- Keep `hard_max_seconds` conservative to avoid latency and memory regressions.
+- Keep `capture_auto_stop_seconds` less than or equal to `hard_max_seconds`.
+- Use selection metadata fields (`selection_*`) to inspect whether thresholds are too strict.
 
 ## Export/Import
 
