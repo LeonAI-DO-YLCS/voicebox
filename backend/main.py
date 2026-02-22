@@ -4,7 +4,7 @@ FastAPI application for voicebox backend.
 Handles voice cloning, generation history, and server mode.
 """
 
-from fastapi import FastAPI, Depends, UploadFile, File, Form, HTTPException, Request
+from fastapi import FastAPI, Depends, UploadFile, File, Form, HTTPException, Request, Response
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, StreamingResponse, JSONResponse
@@ -394,11 +394,22 @@ async def delete_profile(
 @app.post("/profiles/{profile_id}/samples", response_model=models.ProfileSampleResponse)
 async def add_profile_sample(
     profile_id: str,
+    request: Request,
+    response: Response,
     file: UploadFile = File(...),
     reference_text: str = Form(...),
     db: Session = Depends(get_db),
 ):
     """Add a sample to a voice profile."""
+    task_manager = get_task_manager()
+    processing_task_id = request.headers.get("x-task-id") or str(uuid.uuid4())
+    task_manager.start_recording_processing(
+        processing_task_id, "Uploading sample for validation"
+    )
+    task_manager.update_recording_processing(
+        processing_task_id, stage="upload", progress=5.0, message="Uploading sample"
+    )
+
     # Preserve the uploaded file's extension so librosa can detect format correctly.
     # Defaulting to .wav was causing soundfile to reject MP3/WebM content as invalid WAV.
     _allowed_audio_exts = {'.wav', '.mp3', '.m4a', '.ogg', '.flac', '.aac', '.webm', '.opus'}
@@ -411,16 +422,52 @@ async def add_profile_sample(
         tmp_path = tmp.name
 
     try:
+        task_manager.update_recording_processing(
+            processing_task_id,
+            stage="validate",
+            progress=35.0,
+            message="Validating sample quality",
+        )
         sample = await profiles.add_profile_sample(
             profile_id,
             tmp_path,
             reference_text,
             db,
         )
+        task_manager.update_recording_processing(
+            processing_task_id,
+            stage="embed",
+            progress=80.0,
+            message="Preparing voice embedding data",
+        )
+        task_manager.update_recording_processing(
+            processing_task_id,
+            stage="save",
+            progress=95.0,
+            message="Saving sample",
+        )
+        task_manager.complete_recording_processing(
+            processing_task_id,
+            stage="save",
+            message="Sample saved",
+        )
+        response.headers["X-Task-ID"] = processing_task_id
         return sample
     except ValueError as e:
+        task_manager.error_recording_processing(
+            processing_task_id,
+            str(e),
+            stage="validate",
+            message="Sample validation failed",
+        )
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
+        task_manager.error_recording_processing(
+            processing_task_id,
+            str(e),
+            stage="save",
+            message="Failed to process sample",
+        )
         raise HTTPException(status_code=500, detail=f"Failed to process audio file: {str(e)}")
     finally:
         # Clean up temp file
@@ -1005,10 +1052,21 @@ async def export_generation_audio(
 
 @app.post("/transcribe", response_model=models.TranscriptionResponse)
 async def transcribe_audio(
+    request: Request,
+    response: Response,
     file: UploadFile = File(...),
     language: Optional[str] = Form(None),
 ):
     """Transcribe audio file to text."""
+    task_manager = get_task_manager()
+    processing_task_id = request.headers.get("x-task-id") or str(uuid.uuid4())
+    task_manager.start_recording_processing(
+        processing_task_id, "Uploading sample for transcription"
+    )
+    task_manager.update_recording_processing(
+        processing_task_id, stage="upload", progress=5.0, message="Uploading sample"
+    )
+
     # Save uploaded file to temporary location
     with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
         content = await file.read()
@@ -1018,6 +1076,12 @@ async def transcribe_audio(
     try:
         # Get audio duration
         from .utils.audio import load_audio
+        task_manager.update_recording_processing(
+            processing_task_id,
+            stage="validate",
+            progress=25.0,
+            message="Validating recording",
+        )
         audio, sr = load_audio(tmp_path)
         duration = len(audio) / sr
         
@@ -1058,25 +1122,65 @@ async def transcribe_audio(
             asyncio.create_task(download_whisper_background())
 
             # Return 202 Accepted
+            task_manager.error_recording_processing(
+                processing_task_id,
+                f"Transcription model {model_size} is downloading",
+                stage="transcribe",
+                message=f"Whisper {model_size} is downloading; retry once complete",
+            )
             raise HTTPException(
                 status_code=202,
                 detail={
                     "message": f"Whisper model {model_size} ({model_name}) is being downloaded. Please wait and try again.",
                     "model_name": progress_model_name,
-                    "downloading": True
+                    "downloading": True,
+                    "task_id": processing_task_id,
+                    "stage": "transcribe",
                 }
             )
 
+        task_manager.update_recording_processing(
+            processing_task_id,
+            stage="transcribe",
+            progress=55.0,
+            message="Transcribing audio",
+        )
         text = await whisper_model.transcribe(tmp_path, language, model_size=model_size)
+        task_manager.update_recording_processing(
+            processing_task_id,
+            stage="embed",
+            progress=80.0,
+            message="Preparing transcript embedding",
+        )
+        task_manager.update_recording_processing(
+            processing_task_id,
+            stage="save",
+            progress=95.0,
+            message="Saving transcript",
+        )
+        task_manager.complete_recording_processing(
+            processing_task_id,
+            stage="save",
+            message="Transcript ready",
+        )
+        response.headers["X-Task-ID"] = processing_task_id
         
         return models.TranscriptionResponse(
             text=text,
             duration=duration,
+            task_id=processing_task_id,
+            stage="save",
         )
         
     except HTTPException:
         raise
     except Exception as e:
+        task_manager.error_recording_processing(
+            processing_task_id,
+            str(e),
+            stage="transcribe",
+            message="Transcription failed",
+        )
         raise HTTPException(status_code=500, detail=str(e))
     finally:
         # Clean up temp file
@@ -1873,10 +1977,25 @@ async def get_active_tasks():
             text_preview=gen_task.text_preview,
             started_at=gen_task.started_at,
         ))
+
+    # Get active recording-processing tasks
+    active_recording_processing = []
+    for recording_task in task_manager.get_active_recording_tasks():
+        active_recording_processing.append(models.ActiveRecordingProcessingTask(
+            task_id=recording_task.task_id,
+            stage=recording_task.stage,
+            status=recording_task.status,
+            progress=recording_task.progress,
+            message=recording_task.message,
+            error=recording_task.error,
+            started_at=recording_task.started_at,
+            updated_at=recording_task.updated_at,
+        ))
     
     return models.ActiveTasksResponse(
         downloads=active_downloads,
         generations=active_generations,
+        recording_processing=active_recording_processing,
     )
 
 

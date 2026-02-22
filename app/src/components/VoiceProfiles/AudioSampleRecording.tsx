@@ -1,36 +1,24 @@
-import { Mic, Pause, Play, Square } from 'lucide-react';
-import { memo, useEffect, useState } from 'react';
-import { Visualizer } from 'react-sound-visualizer';
+import { Loader2, Mic, Pause, Play, Square } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { FormControl, FormItem, FormMessage } from '@/components/ui/form';
+import type { RecordingLifecycleState } from '@/lib/recording/lifecycle';
+import type { RecordingProcessingTask } from '@/lib/recording/processing';
 import { formatAudioDuration } from '@/lib/utils/audio';
-import { usePlatform } from '@/platform/PlatformContext';
-
-const MemoizedWaveform = memo(function MemoizedWaveform({
-  audioStream,
-}: {
-  audioStream: MediaStream;
-}) {
-  return (
-    <div className="absolute inset-0 pointer-events-none flex items-center justify-center opacity-30">
-      <Visualizer audio={audioStream} autoStart strokeColor="#b39a3d">
-        {({ canvasRef }) => (
-          <canvas
-            ref={canvasRef}
-            width={500}
-            height={150}
-            className="w-full h-full"
-          />
-        )}
-      </Visualizer>
-    </div>
-  );
-});
 
 interface AudioSampleRecordingProps {
   file: File | null | undefined;
   isRecording: boolean;
   duration: number;
+  lifecycleState: RecordingLifecycleState;
+  lifecycleStatus: {
+    title: string;
+    description: string;
+  };
+  liveInputLevel: number;
+  waveformSamples: number[];
+  waveformMode: 'waveform' | 'meter';
+  playbackProgress?: number;
+  activeProcessingTask?: RecordingProcessingTask | null;
   onStart: () => void;
   onStop: () => void;
   onCancel: () => void;
@@ -38,14 +26,62 @@ interface AudioSampleRecordingProps {
   onPlayPause: () => void;
   isPlaying: boolean;
   isTranscribing?: boolean;
-  showWaveform?: boolean;
   maxDurationSeconds?: number;
+}
+
+function LiveLevelMeter({ level }: { level: number }) {
+  const clampedLevel = Math.max(0, Math.min(1, level));
+  return (
+    <div className="w-full h-2 rounded-full bg-muted overflow-hidden">
+      <div
+        className="h-full bg-accent transition-[width] duration-100"
+        style={{ width: `${Math.round(clampedLevel * 100)}%` }}
+      />
+    </div>
+  );
+}
+
+function WaveformStrip({
+  samples,
+  playheadProgress,
+}: {
+  samples: number[];
+  playheadProgress?: number;
+}) {
+  const bars = samples.length > 0 ? samples : Array.from({ length: 60 }, () => 0.08);
+  const playheadPercent =
+    playheadProgress !== undefined ? Math.max(0, Math.min(1, playheadProgress)) * 100 : null;
+
+  return (
+    <div className="relative h-20 w-full rounded-md bg-background/40 border border-border px-2 py-2 flex items-end gap-[2px] overflow-hidden">
+      {bars.map((sample, index) => (
+        <div
+          key={`${index}-${sample}`}
+          className="flex-1 bg-accent/70 rounded-sm"
+          style={{ height: `${Math.max(6, Math.round(sample * 100))}%` }}
+        />
+      ))}
+      {playheadPercent !== null && (
+        <div
+          className="absolute top-0 bottom-0 w-[2px] bg-primary"
+          style={{ left: `calc(${playheadPercent}% - 1px)` }}
+        />
+      )}
+    </div>
+  );
 }
 
 export function AudioSampleRecording({
   file,
   isRecording,
   duration,
+  lifecycleState,
+  lifecycleStatus,
+  liveInputLevel,
+  waveformSamples,
+  waveformMode,
+  playbackProgress,
+  activeProcessingTask,
   onStart,
   onStop,
   onCancel,
@@ -53,50 +89,17 @@ export function AudioSampleRecording({
   onPlayPause,
   isPlaying,
   isTranscribing = false,
-  showWaveform = true,
   maxDurationSeconds = 30,
 }: AudioSampleRecordingProps) {
-  const platform = usePlatform();
-  const [audioStream, setAudioStream] = useState<MediaStream | null>(null);
-  const isTauriLinux =
-    platform.metadata.isTauri &&
-    typeof navigator !== 'undefined' &&
-    /linux/i.test(navigator.userAgent);
-
-  // Request microphone access when component mounts
-  useEffect(() => {
-    if (!showWaveform || isTauriLinux) return;
-
-    let stream: MediaStream | null = null;
-
-    navigator.mediaDevices
-      .getUserMedia({ audio: true, video: false })
-      .then((s) => {
-        stream = s;
-        setAudioStream(s);
-      })
-      .catch((err) => {
-        console.warn('Could not access microphone for visualization:', err);
-      });
-
-    return () => {
-      if (stream) {
-        stream.getTracks().forEach((track) => {
-          track.stop();
-        });
-      }
-    };
-  }, [showWaveform, isTauriLinux]);
+  const remainingSeconds = Math.max(0, maxDurationSeconds - duration);
+  const isNearMaxDuration = remainingSeconds <= 5;
 
   return (
     <FormItem>
       <FormControl>
         <div className="space-y-4">
-          {!isRecording && !file && (
-            <div className="relative flex flex-col items-center justify-center gap-4 p-4 border-2 border-dashed rounded-lg min-h-[180px] overflow-hidden">
-              {showWaveform && audioStream && (
-                <MemoizedWaveform audioStream={audioStream} />
-              )}
+          {!isRecording && !file && lifecycleState !== 'processing' && (
+            <div className="relative flex flex-col items-center justify-center gap-4 p-4 border-2 border-dashed rounded-lg min-h-[210px] overflow-hidden">
               <Button
                 type="button"
                 onClick={onStart}
@@ -107,16 +110,29 @@ export function AudioSampleRecording({
                 Start Recording
               </Button>
               <p className="relative z-10 text-sm text-muted-foreground text-center">
-                Click to start recording. Maximum duration: {maxDurationSeconds} seconds.
+                {lifecycleStatus.description}
+              </p>
+              <p className="relative z-10 text-xs text-muted-foreground text-center">
+                Maximum duration: {maxDurationSeconds} seconds.
               </p>
             </div>
           )}
 
           {isRecording && (
-            <div className="relative flex flex-col items-center justify-center gap-4 p-4 border-2 border-accent rounded-lg bg-accent/5 min-h-[180px] overflow-hidden">
-              {showWaveform && audioStream && (
-                <MemoizedWaveform audioStream={audioStream} />
-              )}
+            <div className="relative flex flex-col items-center justify-center gap-4 p-4 border-2 border-accent rounded-lg bg-accent/5 min-h-[210px] overflow-hidden">
+              <div className="w-full space-y-3">
+                {waveformMode === 'waveform' ? (
+                  <WaveformStrip samples={waveformSamples} />
+                ) : (
+                  <div className="space-y-2">
+                    <LiveLevelMeter level={liveInputLevel} />
+                    <p className="text-xs text-muted-foreground text-center">
+                      Waveform unavailable in this runtime. Showing input level meter fallback.
+                    </p>
+                  </div>
+                )}
+              </div>
+
               <div className="relative z-10 flex items-center gap-4">
                 <div className="flex items-center gap-2">
                   <div className="h-3 w-3 rounded-full bg-accent animate-pulse" />
@@ -125,6 +141,7 @@ export function AudioSampleRecording({
                   </span>
                 </div>
               </div>
+
               <Button
                 type="button"
                 onClick={onStop}
@@ -133,17 +150,35 @@ export function AudioSampleRecording({
                 <Square className="h-4 w-4" />
                 Stop Recording
               </Button>
-              <p className="relative z-10 text-sm text-muted-foreground text-center">
-                {formatAudioDuration(Math.max(0, maxDurationSeconds - duration))} remaining
+              <p
+                className={`relative z-10 text-sm text-center ${isNearMaxDuration ? 'text-amber-500' : 'text-muted-foreground'}`}
+              >
+                {formatAudioDuration(remainingSeconds)} remaining
               </p>
             </div>
           )}
 
-          {file && !isRecording && (
-            <div className="flex flex-col items-center justify-center gap-4 p-4 border-2 border-primary rounded-lg bg-primary/5 min-h-[180px]">
+          {!isRecording && lifecycleState === 'processing' && (
+            <div className="flex flex-col items-center justify-center gap-3 p-4 border rounded-lg bg-muted/20 min-h-[180px]">
+              <Loader2 className="h-6 w-6 animate-spin text-primary" />
+              <p className="font-medium">{lifecycleStatus.title}</p>
+              <p className="text-sm text-muted-foreground text-center">
+                {activeProcessingTask?.message || lifecycleStatus.description}
+              </p>
+            </div>
+          )}
+
+          {file && !isRecording && lifecycleState !== 'processing' && (
+            <div className="flex flex-col items-center justify-center gap-4 p-4 border-2 border-primary rounded-lg bg-primary/5 min-h-[210px]">
               <div className="flex items-center gap-2">
                 <Mic className="h-5 w-5 text-primary" />
                 <span className="font-medium">Recording complete</span>
+              </div>
+              <div className="w-full space-y-2">
+                <WaveformStrip samples={waveformSamples} playheadProgress={playbackProgress} />
+                <p className="text-xs text-muted-foreground text-center">
+                  Playback progress is shown on the waveform preview.
+                </p>
               </div>
               <p className="text-sm text-muted-foreground text-center">File: {file.name}</p>
               <div className="flex gap-2">

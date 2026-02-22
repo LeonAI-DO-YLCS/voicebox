@@ -1,31 +1,31 @@
-import { useServerStore } from '@/stores/serverStore';
 import type { LanguageCode } from '@/lib/constants/languages';
 import { VoiceboxAppError } from '@/lib/errors';
+import { useServerStore } from '@/stores/serverStore';
 import type {
-  VoiceProfileCreate,
-  VoiceProfileResponse,
-  ProfileSampleResponse,
+  ActiveTasksResponse,
   GenerationRequest,
   GenerationResponse,
-  HistoryQuery,
-  HistoryListResponse,
-  HistoryResponse,
-  TranscriptionResponse,
   HealthResponse,
-  ModelStatusListResponse,
+  HistoryListResponse,
+  HistoryQuery,
+  HistoryResponse,
   ModelDownloadRequest,
-  ActiveTasksResponse,
+  ModelStatusListResponse,
+  ProfileSampleResponse,
   StoryCreate,
-  StoryResponse,
   StoryDetailResponse,
+  StoryItemBatchUpdate,
   StoryItemCreate,
   StoryItemDetail,
-  StoryItemBatchUpdate,
-  StoryItemReorder,
   StoryItemMove,
-  StoryItemTrim,
+  StoryItemReorder,
   StoryItemSplit,
+  StoryItemTrim,
+  StoryResponse,
+  TranscriptionResponse,
   VoiceCloneReferencePolicyResponse,
+  VoiceProfileCreate,
+  VoiceProfileResponse,
 } from './types';
 
 class ApiClient {
@@ -108,7 +108,8 @@ class ApiClient {
     serverDetail?: unknown;
     networkError?: string;
   }): VoiceboxAppError {
-    const { endpoint, method, url, status, statusText, requestId, serverDetail, networkError } = params;
+    const { endpoint, method, url, status, statusText, requestId, serverDetail, networkError } =
+      params;
     const action = this.inferAction(endpoint, method);
     const baseUrl = this.getBaseUrl();
     const detailMessage = this.toErrorDetailString(serverDetail);
@@ -400,14 +401,22 @@ class ApiClient {
     return this.requestBlob(`/history/${generationId}/export-audio`);
   }
 
-  async importGeneration(file: File): Promise<{ id: string; profile_id: string; profile_name: string; text: string; message: string }> {
+  async importGeneration(file: File): Promise<{
+    id: string;
+    profile_id: string;
+    profile_name: string;
+    text: string;
+    message: string;
+  }> {
     const formData = new FormData();
     formData.append('file', file);
-    return this.requestJson<{ id: string; profile_id: string; profile_name: string; text: string; message: string }>(
-      '/history/import',
-      { method: 'POST', body: formData },
-      false,
-    );
+    return this.requestJson<{
+      id: string;
+      profile_id: string;
+      profile_name: string;
+      text: string;
+      message: string;
+    }>('/history/import', { method: 'POST', body: formData }, false);
   }
 
   // Audio
@@ -420,7 +429,13 @@ class ApiClient {
   }
 
   // Transcription
-  async transcribeAudio(file: File, language?: LanguageCode): Promise<TranscriptionResponse> {
+  async transcribeAudio(
+    file: File,
+    language?: LanguageCode,
+    options?: {
+      taskId?: string;
+    },
+  ): Promise<TranscriptionResponse> {
     const formData = new FormData();
     formData.append('file', file);
     if (language) {
@@ -429,7 +444,11 @@ class ApiClient {
 
     return this.requestJson<TranscriptionResponse>(
       '/transcribe',
-      { method: 'POST', body: formData },
+      {
+        method: 'POST',
+        body: formData,
+        headers: options?.taskId ? { 'x-task-id': options.taskId } : undefined,
+      },
       false,
     );
   }
@@ -440,7 +459,12 @@ class ApiClient {
   }
 
   async triggerModelDownload(modelName: string): Promise<{ message: string }> {
-    console.log('[API] triggerModelDownload called for:', modelName, 'at', new Date().toISOString());
+    console.log(
+      '[API] triggerModelDownload called for:',
+      modelName,
+      'at',
+      new Date().toISOString(),
+    );
     const result = await this.request<{ message: string }>('/models/download', {
       method: 'POST',
       body: JSON.stringify({ model_name: modelName } as ModelDownloadRequest),
@@ -473,10 +497,7 @@ class ApiClient {
     return this.request('/channels');
   }
 
-  async createChannel(data: {
-    name: string;
-    device_ids: string[];
-  }): Promise<{
+  async createChannel(data: { name: string; device_ids: string[] }): Promise<{
     id: string;
     name: string;
     is_default: boolean;
@@ -518,10 +539,7 @@ class ApiClient {
     return this.request(`/channels/${channelId}/voices`);
   }
 
-  async setChannelVoices(
-    channelId: string,
-    profileIds: string[],
-  ): Promise<{ message: string }> {
+  async setChannelVoices(channelId: string, profileIds: string[]): Promise<{ message: string }> {
     return this.request(`/channels/${channelId}/voices`, {
       method: 'PUT',
       body: JSON.stringify({ profile_ids: profileIds }),
@@ -532,10 +550,7 @@ class ApiClient {
     return this.request(`/profiles/${profileId}/channels`);
   }
 
-  async setProfileChannels(
-    profileId: string,
-    channelIds: string[],
-  ): Promise<{ message: string }> {
+  async setProfileChannels(profileId: string, channelIds: string[]): Promise<{ message: string }> {
     return this.request(`/profiles/${profileId}/channels`, {
       method: 'PUT',
       body: JSON.stringify({ channel_ids: channelIds }),
@@ -598,21 +613,33 @@ class ApiClient {
     });
   }
 
-  async moveStoryItem(storyId: string, itemId: string, data: StoryItemMove): Promise<StoryItemDetail> {
+  async moveStoryItem(
+    storyId: string,
+    itemId: string,
+    data: StoryItemMove,
+  ): Promise<StoryItemDetail> {
     return this.request<StoryItemDetail>(`/stories/${storyId}/items/${itemId}/move`, {
       method: 'PUT',
       body: JSON.stringify(data),
     });
   }
 
-  async trimStoryItem(storyId: string, itemId: string, data: StoryItemTrim): Promise<StoryItemDetail> {
+  async trimStoryItem(
+    storyId: string,
+    itemId: string,
+    data: StoryItemTrim,
+  ): Promise<StoryItemDetail> {
     return this.request<StoryItemDetail>(`/stories/${storyId}/items/${itemId}/trim`, {
       method: 'PUT',
       body: JSON.stringify(data),
     });
   }
 
-  async splitStoryItem(storyId: string, itemId: string, data: StoryItemSplit): Promise<StoryItemDetail[]> {
+  async splitStoryItem(
+    storyId: string,
+    itemId: string,
+    data: StoryItemSplit,
+  ): Promise<StoryItemDetail[]> {
     return this.request<StoryItemDetail[]>(`/stories/${storyId}/items/${itemId}/split`, {
       method: 'POST',
       body: JSON.stringify(data),

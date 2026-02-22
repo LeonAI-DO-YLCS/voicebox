@@ -201,6 +201,48 @@ Voice cloning policy is backend-owned and configurable through environment varia
 
 If config is invalid at startup, Voicebox falls back to safe defaults and logs a warning.
 
+## Recording Lifecycle and Device Model
+
+Voicebox recording surfaces now use a canonical lifecycle state machine:
+
+- `idle`
+- `armed`
+- `recording`
+- `paused`
+- `processing`
+- `ready`
+- `error`
+
+Invalid state jumps are rejected by shared transition guards in frontend hooks.
+
+System capture device data is normalized to:
+
+- `id`
+- `name`
+- `isDefault`
+- `availability` (`available` / `disconnected`)
+- `permission` (`granted` / `denied` / `prompt` / `unknown`)
+
+This allows consistent behavior across webview and native/Tauri capture paths.
+
+## Processing Stage Semantics
+
+Recording/transcription processing is modeled with ordered stages:
+
+1. `upload`
+2. `validate`
+3. `transcribe`
+4. `embed`
+5. `save`
+
+Each processing operation carries a stable `task_id` (client-supplied via `x-task-id` when available) and is exposed through `/tasks/active` under `recording_processing`.
+
+This supports:
+
+- stage-aware progress rendering
+- concurrent task separation
+- restore-on-refresh task visibility
+
 ### Tuning Guidance
 
 - Increase `recommended_target_seconds` gradually (for example 15 -> 20) before raising hard max.

@@ -128,6 +128,9 @@ Create multi-voice narratives, podcasts, and conversations with a timeline-based
 - **System audio capture** — record desktop audio on macOS and Windows
 - **Automatic transcription** powered by Whisper
 - **Export recordings** in multiple formats
+- **Lifecycle-driven UX** — `idle` → `armed` → `recording` → `processing` → `ready/error`
+- **Stage progress tracking** — `upload` → `validate` → `transcribe` → `embed` → `save`
+- **Persistent task surface** — active model/recording tasks remain visible across navigation and refresh
 
 ### Generation History
 
@@ -323,6 +326,9 @@ VOICEBOX_SERVER_PORT=17493 VOICEBOX_SERVER_HOST=127.0.0.1 bun run dev:server
 - `Python module errors`: run `bun run setup:python` to rebuild `backend/.venv`.
 - `Tauri build issues`: run `cd tauri/src-tauri && cargo check` and install missing Rust toolchain deps.
 - `Backend not reachable`: check the printed backend URL and open `<url>/docs` in your browser.
+- `Microphone access denied`: enable desktop microphone privacy access and restart Voicebox.
+- `No input devices on WSL2`: verify `PULSE_SERVER`, `pactl info`, and install `libasound2-plugins`.
+- `Task/progress appears stuck`: check the Background Tasks panel and confirm `/tasks/active` returns updates.
 
 ### Performance Notes
 

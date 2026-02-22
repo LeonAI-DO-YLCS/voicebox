@@ -20,6 +20,7 @@ import {
   FormMessage,
 } from '@/components/ui/form';
 import { Input } from '@/components/ui/input';
+import { Progress } from '@/components/ui/progress';
 import {
   Select,
   SelectContent,
@@ -31,6 +32,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Textarea } from '@/components/ui/textarea';
 import { useToast } from '@/components/ui/use-toast';
 import { LANGUAGE_CODES, LANGUAGE_OPTIONS, type LanguageCode } from '@/lib/constants/languages';
+import { getErrorDisplayDetails } from '@/lib/errors';
 import { useAudioPlayer } from '@/lib/hooks/useAudioPlayer';
 import { useAudioRecording } from '@/lib/hooks/useAudioRecording';
 import {
@@ -42,8 +44,10 @@ import {
   useUploadAvatar,
   useVoiceCloneReferencePolicy,
 } from '@/lib/hooks/useProfiles';
+import { useRecordingProcessingProgress } from '@/lib/hooks/useRecordingProcessingProgress';
 import { useSystemAudioCapture } from '@/lib/hooks/useSystemAudioCapture';
 import { useTranscription } from '@/lib/hooks/useTranscription';
+import { RECORDING_PROCESSING_STAGE_LABELS } from '@/lib/recording/processing';
 import { convertToWav, formatAudioDuration, getAudioDuration } from '@/lib/utils/audio';
 import { usePlatform } from '@/platform/PlatformContext';
 import { useServerStore } from '@/stores/serverStore';
@@ -124,11 +128,12 @@ export function ProfileForm() {
   const transcribe = useTranscription();
   const { toast } = useToast();
   const [sampleMode, setSampleMode] = useState<'upload' | 'record' | 'system'>('record');
+  const [activeTranscriptionTaskId, setActiveTranscriptionTaskId] = useState<string | null>(null);
   const [audioDuration, setAudioDuration] = useState<number | null>(null);
   const [isValidatingAudio, setIsValidatingAudio] = useState(false);
   const [avatarPreview, setAvatarPreview] = useState<string | null>(null);
   const avatarInputRef = useRef<HTMLInputElement>(null);
-  const { isPlaying, playPause, cleanup: cleanupAudio } = useAudioPlayer();
+  const { isPlaying, playbackProgress, playPause, cleanup: cleanupAudio } = useAudioPlayer();
   const isCreating = !editingProfileId;
   const serverUrl = useServerStore((state) => state.serverUrl);
   const { data: voiceClonePolicy } = useVoiceCloneReferencePolicy();
@@ -154,6 +159,7 @@ export function ProfileForm() {
 
   const selectedFile = form.watch('sampleFile');
   const selectedAvatarFile = form.watch('avatarFile');
+  const { task: activeProcessingTask } = useRecordingProcessingProgress(activeTranscriptionTaskId);
 
   // Validate audio duration when file is selected
   useEffect(() => {
@@ -200,12 +206,17 @@ export function ProfileForm() {
       setAudioDuration(null);
       form.clearErrors('sampleFile');
     }
-  }, [selectedFile, form, maxAudioDurationSeconds]);
+  }, [selectedFile, form, maxAudioDurationSeconds, effectivePolicy.hard_min_seconds]);
 
   const {
     isRecording,
     duration,
     error: recordingError,
+    lifecycleState: recordingLifecycleState,
+    lifecycleStatus: recordingLifecycleStatus,
+    liveInputLevel,
+    waveformSamples,
+    waveformMode,
     startRecording,
     stopRecording,
     cancelRecording,
@@ -232,8 +243,12 @@ export function ProfileForm() {
     duration: systemDuration,
     error: systemRecordingError,
     isSupported: isSystemAudioSupported,
+    permissionState: systemPermissionState,
+    lifecycleState: systemLifecycleState,
+    lifecycleStatus: systemLifecycleStatus,
     inputDevices: systemInputDevices,
     selectedInputDeviceId,
+    disconnectedDeviceId,
     setSelectedInputDeviceId,
     isLoadingInputDevices,
     refreshInputDevices,
@@ -355,16 +370,27 @@ export function ProfileForm() {
     }
 
     try {
+      const taskId =
+        typeof crypto !== 'undefined' && 'randomUUID' in crypto
+          ? crypto.randomUUID()
+          : `recording-${Date.now()}`;
+      setActiveTranscriptionTaskId(taskId);
       const language = form.getValues('language');
-      const result = await transcribe.mutateAsync({ file, language });
+      const result = await transcribe.mutateAsync({ file, language, taskId });
+      setActiveTranscriptionTaskId(result.task_id ?? taskId);
 
       form.setValue('referenceText', result.text, { shouldValidate: true });
     } catch (error) {
+      const details = getErrorDisplayDetails(error, 'Transcription failed');
       toast({
-        title: 'Transcription failed',
-        description: error instanceof Error ? error.message : 'Failed to transcribe audio',
+        title: details.title,
+        description: `${details.summary}${details.hint ? ` ${details.hint}` : ''}`,
         variant: 'destructive',
       });
+    } finally {
+      window.setTimeout(() => {
+        setActiveTranscriptionTaskId(null);
+      }, 1500);
     }
   }
 
@@ -746,8 +772,7 @@ export function ProfileForm() {
                                 isValidating={isValidatingAudio}
                                 isTranscribing={transcribe.isPending}
                                 isDisabled={
-                                  audioDuration !== null &&
-                                  audioDuration > maxAudioDurationSeconds
+                                  audioDuration !== null && audioDuration > maxAudioDurationSeconds
                                 }
                                 fieldName={name}
                                 recommendedDurationSeconds={recommendedAudioDurationSeconds}
@@ -766,6 +791,13 @@ export function ProfileForm() {
                                 file={selectedFile}
                                 isRecording={isRecording}
                                 duration={duration}
+                                lifecycleState={recordingLifecycleState}
+                                lifecycleStatus={recordingLifecycleStatus}
+                                liveInputLevel={liveInputLevel}
+                                waveformSamples={waveformSamples}
+                                waveformMode={waveformMode}
+                                playbackProgress={playbackProgress}
+                                activeProcessingTask={activeProcessingTask}
                                 onStart={startRecording}
                                 onStop={stopRecording}
                                 onCancel={handleCancelRecording}
@@ -789,8 +821,12 @@ export function ProfileForm() {
                                   file={selectedFile}
                                   isRecording={isSystemRecording}
                                   duration={systemDuration}
+                                  lifecycleState={systemLifecycleState}
+                                  lifecycleStatus={systemLifecycleStatus}
+                                  permissionState={systemPermissionState}
                                   inputDevices={systemInputDevices}
                                   selectedInputDeviceId={selectedInputDeviceId}
+                                  disconnectedDeviceId={disconnectedDeviceId}
                                   onSelectInputDevice={setSelectedInputDeviceId}
                                   onRefreshInputDevices={refreshInputDevices}
                                   isLoadingInputDevices={isLoadingInputDevices}
@@ -808,6 +844,28 @@ export function ProfileForm() {
                           </TabsContent>
                         )}
                       </Tabs>
+
+                      {(transcribe.isPending || activeProcessingTask) && (
+                        <div className="rounded-md border p-3 space-y-2">
+                          <p className="text-sm font-medium">
+                            {
+                              RECORDING_PROCESSING_STAGE_LABELS[
+                                activeProcessingTask?.stage ?? 'transcribe'
+                              ]
+                            }
+                          </p>
+                          <Progress
+                            value={activeProcessingTask?.progress ?? undefined}
+                            className="h-2"
+                          />
+                          <p className="text-xs text-muted-foreground">
+                            {activeProcessingTask?.message ||
+                              (transcribe.isPending
+                                ? 'Processing in progress...'
+                                : 'Awaiting completion...')}
+                          </p>
+                        </div>
+                      )}
 
                       <FormField
                         control={form.control}

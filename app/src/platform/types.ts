@@ -37,6 +37,10 @@ export interface AudioDevice {
   id: string;
   name: string;
   is_default: boolean;
+  availability?: 'available' | 'disconnected';
+  permission_state?: 'granted' | 'denied' | 'prompt' | 'unknown';
+  host?: string;
+  diagnostics?: string;
 }
 
 export interface PlatformAudio {

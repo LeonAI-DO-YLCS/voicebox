@@ -3,7 +3,7 @@ Pydantic models for request/response validation.
 """
 
 from pydantic import BaseModel, Field
-from typing import Optional, List
+from typing import Optional, List, Literal
 from datetime import datetime
 
 
@@ -135,6 +135,8 @@ class TranscriptionResponse(BaseModel):
     """Response model for transcription."""
     text: str
     duration: float
+    task_id: Optional[str] = None
+    stage: Optional[str] = None
 
 
 class HealthResponse(BaseModel):
@@ -184,10 +186,24 @@ class ActiveGenerationTask(BaseModel):
     started_at: datetime
 
 
+class ActiveRecordingProcessingTask(BaseModel):
+    """Response model for active recording processing task."""
+
+    task_id: str
+    stage: Literal["upload", "validate", "transcribe", "embed", "save"]
+    status: Literal["running", "error"]
+    progress: Optional[float] = None
+    message: Optional[str] = None
+    error: Optional[str] = None
+    started_at: datetime
+    updated_at: datetime
+
+
 class ActiveTasksResponse(BaseModel):
     """Response model for active tasks."""
     downloads: List[ActiveDownloadTask]
     generations: List[ActiveGenerationTask]
+    recording_processing: List[ActiveRecordingProcessingTask]
 
 
 class AudioChannelCreate(BaseModel):

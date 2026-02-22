@@ -22,6 +22,10 @@ pub struct AudioInputDevice {
     pub id: String,
     pub name: String,
     pub is_default: bool,
+    pub availability: String,
+    pub permission_state: String,
+    pub host: Option<String>,
+    pub diagnostics: Option<String>,
 }
 
 pub struct AudioCaptureState {

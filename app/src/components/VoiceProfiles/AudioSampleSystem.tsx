@@ -1,25 +1,39 @@
-import { Mic, Monitor, Pause, Play, RotateCw, Square } from 'lucide-react';
+import { AlertTriangle, Mic, Monitor, Pause, Play, RotateCw, Square } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { FormControl, FormItem, FormMessage } from '@/components/ui/form';
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import type { AudioDevice } from '@/platform/types';
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select';
+import type { NormalizedInputDevice } from '@/lib/recording/devices';
+import type { RecordingLifecycleState } from '@/lib/recording/lifecycle';
 import { formatAudioDuration } from '@/lib/utils/audio';
 
 interface AudioSampleSystemProps {
   file: File | null | undefined;
   isRecording: boolean;
   duration: number;
+  lifecycleState: RecordingLifecycleState;
+  lifecycleStatus: {
+    title: string;
+    description: string;
+  };
+  permissionState: 'granted' | 'denied' | 'prompt' | 'unknown';
+  inputDevices: NormalizedInputDevice[];
+  selectedInputDeviceId: string | null;
+  disconnectedDeviceId?: string | null;
+  onSelectInputDevice: (deviceId: string) => void;
+  onRefreshInputDevices?: () => void;
+  isLoadingInputDevices?: boolean;
   onStart: () => void;
   onStop: () => void;
   onCancel: () => void;
   onTranscribe: () => void;
   onPlayPause: () => void;
   isPlaying: boolean;
-  inputDevices: AudioDevice[];
-  selectedInputDeviceId: string | null;
-  onSelectInputDevice: (deviceId: string) => void;
-  onRefreshInputDevices?: () => void;
-  isLoadingInputDevices?: boolean;
   isTranscribing?: boolean;
   maxDurationSeconds?: number;
 }
@@ -28,31 +42,39 @@ export function AudioSampleSystem({
   file,
   isRecording,
   duration,
+  lifecycleState,
+  lifecycleStatus,
+  permissionState,
+  inputDevices,
+  selectedInputDeviceId,
+  disconnectedDeviceId,
+  onSelectInputDevice,
+  onRefreshInputDevices,
+  isLoadingInputDevices = false,
   onStart,
   onStop,
   onCancel,
   onTranscribe,
   onPlayPause,
   isPlaying,
-  inputDevices,
-  selectedInputDeviceId,
-  onSelectInputDevice,
-  onRefreshInputDevices,
-  isLoadingInputDevices = false,
   isTranscribing = false,
   maxDurationSeconds = 30,
 }: AudioSampleSystemProps) {
-  const hasInputDevices = inputDevices.length > 0;
+  const availableDevices = inputDevices.filter((device) => device.availability === 'available');
+  const hasInputDevices = availableDevices.length > 0;
+  const selectedDevice =
+    availableDevices.find((device) => device.id === selectedInputDeviceId) ?? null;
+  const remainingSeconds = Math.max(0, maxDurationSeconds - duration);
 
   return (
     <FormItem>
       <FormControl>
         <div className="space-y-4">
           {!isRecording && !file && (
-            <div className="flex flex-col items-center justify-center gap-4 p-4 border-2 border-dashed rounded-lg min-h-[180px]">
-              {hasInputDevices && (
-                <div className="w-full max-w-md space-y-2">
-                  <p className="text-sm text-muted-foreground">Audio Input Source</p>
+            <div className="flex flex-col items-center justify-center gap-4 p-4 border-2 border-dashed rounded-lg min-h-[220px]">
+              <div className="w-full max-w-md space-y-2">
+                <p className="text-sm text-muted-foreground">Audio Input Source</p>
+                {hasInputDevices ? (
                   <div className="flex gap-2">
                     <Select
                       value={selectedInputDeviceId ?? undefined}
@@ -63,10 +85,10 @@ export function AudioSampleSystem({
                         <SelectValue placeholder="Select input source" />
                       </SelectTrigger>
                       <SelectContent>
-                        {inputDevices.map((device) => (
+                        {availableDevices.map((device) => (
                           <SelectItem key={device.id} value={device.id}>
                             {device.name}
-                            {device.is_default ? ' (Default)' : ''}
+                            {device.isDefault ? ' (Host Default)' : ''}
                           </SelectItem>
                         ))}
                       </SelectContent>
@@ -80,20 +102,54 @@ export function AudioSampleSystem({
                         disabled={isLoadingInputDevices}
                         aria-label="Refresh audio input devices"
                       >
-                        <RotateCw className={`h-4 w-4 ${isLoadingInputDevices ? 'animate-spin' : ''}`} />
+                        <RotateCw
+                          className={`h-4 w-4 ${isLoadingInputDevices ? 'animate-spin' : ''}`}
+                        />
                       </Button>
                     )}
                   </div>
-                </div>
-              )}
-              <Button type="button" onClick={onStart} size="lg" className="flex items-center gap-2">
+                ) : (
+                  <div className="rounded-md border border-destructive/40 bg-destructive/5 p-3 text-sm">
+                    <p className="font-medium text-destructive flex items-center gap-2">
+                      <AlertTriangle className="h-4 w-4" />
+                      No input devices available
+                    </p>
+                    <p className="mt-1 text-muted-foreground">
+                      Connect/enable a microphone and refresh. On WSL2 ensure WSLg/PulseAudio is
+                      active and Windows microphone access for desktop apps is enabled.
+                    </p>
+                  </div>
+                )}
+                {selectedDevice && (
+                  <p className="text-xs text-muted-foreground">
+                    Selected: {selectedDevice.name}
+                    {selectedDevice.isDefault ? ' (Host Default)' : ''}
+                  </p>
+                )}
+                {disconnectedDeviceId && (
+                  <p className="text-xs text-amber-500">
+                    Previously selected device disconnected: {disconnectedDeviceId}
+                  </p>
+                )}
+                {permissionState === 'denied' && (
+                  <p className="text-xs text-destructive">
+                    Microphone permission denied. Enable desktop microphone access and restart
+                    Voicebox if needed.
+                  </p>
+                )}
+              </div>
+              <Button
+                type="button"
+                onClick={onStart}
+                size="lg"
+                className="flex items-center gap-2"
+                disabled={!hasInputDevices || permissionState === 'denied'}
+              >
                 <Monitor className="h-5 w-5" />
                 Start Capture
               </Button>
               <p className="text-sm text-muted-foreground text-center">
-                Capture system audio or microphone input. On Linux/WSL, all host-exposed inputs are
-                listed above and the host default is selected automatically.
-                Maximum duration: {maxDurationSeconds} seconds.
+                {lifecycleStatus.description} Maximum duration: {maxDurationSeconds} seconds.
               </p>
             </div>
           )}
@@ -117,13 +173,15 @@ export function AudioSampleSystem({
                 <Square className="h-4 w-4" />
                 Stop Capture
               </Button>
-              <p className="text-sm text-muted-foreground text-center">
-                {formatAudioDuration(Math.max(0, maxDurationSeconds - duration))} remaining
+              <p
+                className={`text-sm text-center ${remainingSeconds <= 5 ? 'text-amber-500' : 'text-muted-foreground'}`}
+              >
+                {formatAudioDuration(remainingSeconds)} remaining
               </p>
             </div>
           )}
 
-          {file && !isRecording && (
+          {file && !isRecording && lifecycleState !== 'processing' && (
             <div className="flex flex-col items-center justify-center gap-4 p-4 border-2 border-primary rounded-lg bg-primary/5 min-h-[180px]">
               <div className="flex items-center gap-2">
                 <Monitor className="h-5 w-5 text-primary" />
@@ -153,6 +211,13 @@ export function AudioSampleSystem({
                   Capture Again
                 </Button>
               </div>
+            </div>
+          )}
+
+          {!isRecording && lifecycleState === 'processing' && (
+            <div className="rounded-md border p-3 bg-muted/20">
+              <p className="text-sm font-medium">{lifecycleStatus.title}</p>
+              <p className="text-xs text-muted-foreground mt-1">{lifecycleStatus.description}</p>
             </div>
           )}
         </div>

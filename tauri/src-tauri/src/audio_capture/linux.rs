@@ -14,6 +14,7 @@ struct EnumeratedInputDevice {
     name: String,
     is_default: bool,
     is_loopback: bool,
+    host: String,
     device: Device,
 }
 
@@ -218,6 +219,14 @@ pub fn list_input_devices() -> Result<Vec<AudioInputDevice>, String> {
             id: device.id,
             name: device.name,
             is_default: device.is_default,
+            availability: "available".to_string(),
+            permission_state: "unknown".to_string(),
+            host: Some(device.host),
+            diagnostics: if device.is_loopback {
+                Some("loopback_source".to_string())
+            } else {
+                None
+            },
         })
         .collect())
 }
@@ -310,6 +319,7 @@ fn enumerate_input_devices() -> Result<Vec<EnumeratedInputDevice>, String> {
                 name: display_name,
                 is_default,
                 is_loopback: is_loopback_source(&raw_name),
+                host: format!("{:?}", host_id),
                 device,
             });
         }

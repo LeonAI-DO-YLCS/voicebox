@@ -88,6 +88,8 @@ export interface TranscriptionRequest {
 export interface TranscriptionResponse {
   text: string;
   duration: number;
+  task_id?: string;
+  stage?: 'upload' | 'validate' | 'transcribe' | 'embed' | 'save';
 }
 
 export interface HealthResponse {
@@ -114,7 +116,7 @@ export interface ModelStatus {
   model_name: string;
   display_name: string;
   downloaded: boolean;
-  downloading: boolean;  // True if download is in progress
+  downloading: boolean; // True if download is in progress
   size_mb?: number;
   loaded: boolean;
 }
@@ -140,9 +142,21 @@ export interface ActiveGenerationTask {
   started_at: string;
 }
 
+export interface ActiveRecordingProcessingTask {
+  task_id: string;
+  stage: 'upload' | 'validate' | 'transcribe' | 'embed' | 'save';
+  status: 'running' | 'error';
+  progress: number | null;
+  message?: string;
+  error?: string;
+  started_at: string;
+  updated_at: string;
+}
+
 export interface ActiveTasksResponse {
   downloads: ActiveDownloadTask[];
   generations: ActiveGenerationTask[];
+  recording_processing: ActiveRecordingProcessingTask[];
 }
 
 export interface StoryCreate {

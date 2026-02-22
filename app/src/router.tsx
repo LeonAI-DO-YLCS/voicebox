@@ -6,17 +6,19 @@ import { ModelsTab } from '@/components/ModelsTab/ModelsTab';
 import { ServerTab } from '@/components/ServerTab/ServerTab';
 import { Sidebar } from '@/components/Sidebar';
 import { StoriesTab } from '@/components/StoriesTab/StoriesTab';
+import { ActiveTaskPanel } from '@/components/Tasks/ActiveTaskPanel';
 import { Toaster } from '@/components/ui/toaster';
 import { VoicesTab } from '@/components/VoicesTab/VoicesTab';
 import { useModelDownloadToast } from '@/lib/hooks/useModelDownloadToast';
 import { MODEL_DISPLAY_NAMES, useRestoreActiveTasks } from '@/lib/hooks/useRestoreActiveTasks';
+
 // Simple platform check that works in both web and Tauri
 const isMacOS = () => navigator.platform.toLowerCase().includes('mac');
 
 // Root layout component
 function RootLayout() {
   // Monitor active downloads/generations and show toasts for them
-  const activeDownloads = useRestoreActiveTasks();
+  const { activeDownloads, tasks } = useRestoreActiveTasks();
 
   return (
     <AppFrame>
@@ -41,6 +43,8 @@ function RootLayout() {
           />
         );
       })}
+
+      <ActiveTaskPanel tasks={tasks} />
 
       <Toaster />
     </AppFrame>
